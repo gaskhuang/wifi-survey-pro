@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wi-Fi Survey Pro</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M1.05 12C4 7.5 8 5 12 5s8 2.5 10.95 7"/>
+        <path d="M5 16.5C7 14 9.5 13 12 13s5 1 7 3.5"/>
+        <circle cx="12" cy="20" r="1.5" fill="currentColor"/>
+      </svg>
+      <span>Wi-Fi Survey Pro</span>
+      <span class="version-badge">v2.1</span>
+    </div>
+
+    <nav>
+      <a href="#" class="nav-item active" data-tab="scanner">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>掃描
+      </a>
+      <a href="#" class="nav-item" data-tab="channels">
+        <svg viewBox="0 0 24 24"><rect x="2" y="3" width="4" height="18" rx="1"/><rect x="9" y="7" width="4" height="14" rx="1"/><rect x="16" y="10" width="4" height="11" rx="1"/></svg>頻道分析
+      </a>
+      <a href="#" class="nav-item" data-tab="heatmap">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>覆蓋熱圖
+      </a>
+      <a href="#" class="nav-item" data-tab="monitor">
+        <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>即時監控
+      </a>
+      <a href="#" class="nav-item" data-tab="netperf">
+        <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>網路效能
+      </a>
+      <a href="#" class="nav-item" data-tab="iperf">
+        <svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>iperf3
+      </a>
+      <a href="#" class="nav-item" data-tab="report">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>報告
+      </a>
+    </nav>
+
+    <!-- Current connection -->
+    <div id="conn-badge" class="conn-badge hidden">
+      <div class="conn-ssid" id="conn-ssid">—</div>
+      <div class="conn-vendor" id="conn-vendor"></div>
+      <div class="conn-stats">
+        <span id="conn-rssi">— dBm</span>
+        <span id="conn-snr">SNR —</span>
+        <span id="conn-band">—</span>
+      </div>
+      <div class="conn-row">
+        <span id="conn-tx">Tx — Mbps</span>
+        <span id="conn-std" style="color:var(--text-3);font-size:10px"></span>
+      </div>
+      <div class="conn-qbar-wrap">
+        <div id="conn-qbar" class="conn-qbar"></div>
+        <span id="conn-qscore" class="conn-qscore">—</span>
+      </div>
+    </div>
+    <div id="conn-none" class="conn-none">未連接 Wi-Fi</div>
+  </aside>
+
+  <main id="content">
+
+    <!-- ═══ TAB: Scanner ═════════════════════════════════════════════════════ -->
+    <div class="tab-pane active" id="tab-scanner">
+
+      <!-- WiFi Explorer style toolbar -->
+      <div class="we-toolbar">
+        <div class="we-filter-group">
+          <button class="we-tab active" data-filter="all">All</button>
+          <button class="we-tab" data-filter="2.4GHz">2.4 GHz</button>
+          <button class="we-tab" data-filter="5GHz">5 GHz</button>
+          <button class="we-tab" data-filter="6GHz">6 GHz</button>
+        </div>
+        <div class="we-filter-group">
+          <button class="we-tab" data-filter="open">Open</button>
+          <button class="we-tab" data-filter="secure">Secure</button>
+        </div>
+        <div class="we-spacer"></div>
+        <div class="we-search-wrap">
+          <svg viewBox="0 0 24 24" class="we-search-icon"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="scan-search" class="we-search" placeholder="Filter">
+        </div>
+        <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" id="btn-export-csv-scan">CSV</button>
+        <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" id="btn-export-json-scan">JSON</button>
+        <button class="we-scan-btn" id="btn-scan">
+          <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          Scan
+        </button>
+      </div>
+
+      <div id="scan-status" class="status-bar hidden"></div>
+
+      <!-- Network table -->
+      <div class="table-wrap" id="net-table-wrap">
+        <table id="net-table">
+          <thead>
+            <tr>
+              <th class="col-bar"></th>
+              <th data-sort="bssid">BSSID</th>
+              <th data-sort="ssid">Network Name</th>
+              <th data-sort="vendor">Vendor</th>
+              <th data-sort="signal_pct" class="sort-desc">Signal</th>
+              <th data-sort="channel">Cha...</th>
+              <th data-sort="width">Channel Width</th>
+              <th data-sort="band">Band</th>
+              <th data-sort="mode">Mode</th>
+              <th data-sort="gen">Gen</th>
+              <th data-sort="security">Security</th>
+              <th data-sort="max_rate">Max Rate</th>
+              <th data-sort="seen_ago">Seen</th>
+            </tr>
+          </thead>
+          <tbody id="net-tbody">
+            <tr class="empty-row"><td colspan="13">Click Scan to detect nearby Wi-Fi networks</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Channel spectrum chart (WiFi Explorer style) -->
+      <div class="spectrum-wrap">
+        <canvas id="spectrum-canvas"></canvas>
+      </div>
+
+      <!-- Status bar -->
+      <div class="we-statusbar" id="we-statusbar">
+        Networks Found: <span id="sb-total">0</span>,
+        Displayed: <span id="sb-displayed">0</span> (<span id="sb-pct">0%</span>),
+        Selected: <span id="sb-selected">0</span>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Channels ════════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-channels">
+      <div class="tab-header">
+        <h1>頻道分析</h1>
+        <div class="actions">
+          <button class="btn btn-primary" id="btn-analyze">
+            <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>分析
+          </button>
+        </div>
+      </div>
+
+      <div class="cards-row" id="channel-summary-cards">
+        <div class="card"><div class="card-label">偵測網路</div><div class="card-val" id="csum-total">—</div></div>
+        <div class="card"><div class="card-label">2.4GHz</div><div class="card-val" id="csum-24">—</div></div>
+        <div class="card"><div class="card-label">5GHz</div><div class="card-val" id="csum-5">—</div></div>
+        <div class="card"><div class="card-label">6GHz (6E/7)</div><div class="card-val" id="csum-6">—</div></div>
+        <div class="card"><div class="card-label">同頻干擾熱區</div><div class="card-val" id="csum-coi">—</div></div>
+        <div class="card"><div class="card-label">偵測到 Wi-Fi 7</div><div class="card-val" id="csum-wifi7">—</div></div>
+      </div>
+
+      <div class="band-charts" style="overflow-y:auto;flex:1;padding:0 20px 12px">
+        <div class="band-panel">
+          <div class="band-title">2.4 GHz — 頻道占用 <span class="tag">非重疊: 1/6/11 (藍色)</span></div>
+          <div class="chart-container" style="height:170px"><canvas id="ch-chart-24"></canvas></div>
+          <div class="best-channels" id="best-24"></div>
+        </div>
+        <div class="band-panel">
+          <div class="band-title">5 GHz — 頻道占用 <span class="tag tag-dfs">橘色=DFS</span> <span class="tag" style="color:#6366f1">頻道寬度感知</span></div>
+          <div class="chart-container" style="height:170px"><canvas id="ch-chart-5"></canvas></div>
+          <div class="best-channels" id="best-5"></div>
+        </div>
+        <div class="band-panel" id="panel-6ghz">
+          <div class="band-title">6 GHz — Wi-Fi 6E / Wi-Fi 7 <span class="tag" style="color:#a855f7">下頻段 ch1-125</span></div>
+          <div class="chart-container" style="height:170px"><canvas id="ch-chart-6"></canvas></div>
+          <div class="best-channels" id="best-6"></div>
+        </div>
+      </div>
+
+      <div class="recs-section">
+        <div class="section-title">優化建議</div>
+        <div id="recs-list"></div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Heatmap ═════════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-heatmap">
+      <div class="tab-header">
+        <h1>覆蓋熱圖</h1>
+        <div class="actions">
+          <!-- Metric selector -->
+          <select id="hm-metric" class="select-input">
+            <option value="rssi">RSSI 層</option>
+            <option value="snr">SNR 層</option>
+            <option value="quality">品質分數層</option>
+          </select>
+          <label class="btn btn-secondary" for="fp-upload">
+            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>平面圖
+          </label>
+          <input type="file" id="fp-upload" accept="image/*" style="display:none">
+          <button class="btn btn-primary" id="btn-record-pt">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>記錄量測點
+          </button>
+          <button class="btn btn-success" id="btn-gen-heatmap">生成熱圖</button>
+          <button class="btn btn-outline" id="btn-clear-pts">清除</button>
+          <button class="btn btn-outline" id="btn-export-meas-csv">CSV</button>
+          <button class="btn btn-outline" id="btn-export-meas-json">JSON</button>
+        </div>
+      </div>
+
+      <div class="heatmap-layout">
+        <div class="floor-plan-wrap" id="fp-wrap">
+          <div id="fp-hint" class="fp-hint">
+            <svg viewBox="0 0 24 24" width="40"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+            <p>點擊「平面圖」上傳建築圖<br>再點擊地圖位置記錄量測點</p>
+          </div>
+          <canvas id="fp-canvas" style="display:none"></canvas>
+          <div id="heatmap-overlay" style="display:none;position:absolute;inset:0">
+            <img id="heatmap-img" style="width:100%;height:100%;object-fit:contain">
+          </div>
+        </div>
+
+        <div class="meas-panel">
+          <div class="section-title">量測記錄 <span id="meas-count" class="badge">0</span></div>
+          <div id="meas-list" class="meas-list"></div>
+          <div class="meas-thresholds">
+            <div class="thresh-title">企業標準門檻</div>
+            <div class="thresh-row"><span class="dot" style="background:#22c55e"></span>≥ -55 dBm 優異</div>
+            <div class="thresh-row"><span class="dot" style="background:#84cc16"></span>≥ -65 dBm 良好（數據）</div>
+            <div class="thresh-row"><span class="dot" style="background:#eab308"></span>≥ -67 dBm 語音/漫遊</div>
+            <div class="thresh-row"><span class="dot" style="background:#f97316"></span>≥ -70 dBm 普通</div>
+            <div class="thresh-row"><span class="dot" style="background:#ef4444"></span>&lt; -70 dBm 死角補 AP</div>
+            <div class="thresh-row" style="margin-top:8px;color:var(--text-3);font-size:10px">等高線：-65/-75/-85 dBm</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Measurement modal -->
+      <div id="pt-modal" class="modal hidden">
+        <div class="modal-box">
+          <div class="modal-title">記錄量測點</div>
+          <div class="form-row"><label>RSSI (dBm)</label><input type="number" id="pt-rssi" value="-65" min="-100" max="-10"></div>
+          <div class="form-row"><label>SNR (dB)</label><input type="number" id="pt-snr" value="25" min="0" max="60"></div>
+          <div class="form-row"><label>SSID（選填）</label><input type="text" id="pt-ssid" placeholder="OfficeNet-5G"></div>
+          <div class="modal-note">💡 點擊「讀取目前連線」自動帶入 RSSI / SNR</div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="pt-auto-read">讀取目前連線</button>
+            <button class="btn btn-outline" id="pt-cancel">取消</button>
+            <button class="btn btn-primary" id="pt-confirm">確認記錄</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Monitor ═════════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-monitor">
+      <div class="tab-header">
+        <h1>即時訊號監控</h1>
+        <div class="actions">
+          <input type="text" id="mon-ssid" placeholder="指定 SSID（留空=目前連線）" class="text-input" style="width:200px">
+          <select id="mon-interval" class="select-input">
+            <option value="1">每秒</option><option value="2" selected>每 2 秒</option><option value="5">每 5 秒</option>
+          </select>
+          <button class="btn btn-success" id="btn-mon-start">開始</button>
+          <button class="btn btn-danger" id="btn-mon-stop">停止</button>
+        </div>
+      </div>
+
+      <div class="cards-row">
+        <div class="card"><div class="card-label">即時 RSSI</div><div class="card-val" id="mon-rssi">—</div></div>
+        <div class="card"><div class="card-label">SNR</div><div class="card-val" id="mon-snr">—</div></div>
+        <div class="card"><div class="card-label">品質分數</div><div class="card-val" id="mon-qscore">—</div></div>
+        <div class="card"><div class="card-label">Tx Rate</div><div class="card-val" id="mon-tx">—</div></div>
+        <div class="card"><div class="card-label">最小 RSSI</div><div class="card-val" id="mon-min">—</div></div>
+        <div class="card"><div class="card-label">最大 RSSI</div><div class="card-val" id="mon-max">—</div></div>
+        <div class="card"><div class="card-label">平均 RSSI</div><div class="card-val" id="mon-avg">—</div></div>
+      </div>
+
+      <div id="mon-threshold-bar" class="threshold-bar">
+        <div id="mon-thresh-fill" class="threshold-fill"></div>
+        <div id="mon-thresh-label" class="threshold-label">等待資料…</div>
+      </div>
+
+      <div class="chart-section" style="flex:1">
+        <div class="section-title">RSSI + SNR 時序圖（最近 120 點，各 AP 多色）</div>
+        <div class="chart-container" style="height:260px">
+          <canvas id="mon-chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Network Performance ════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-netperf">
+      <div class="tab-header">
+        <h1>網路效能測試</h1>
+        <div class="actions">
+          <input type="text" id="np-host" value="8.8.8.8" class="text-input" style="width:110px" placeholder="Ping target">
+          <input type="text" id="np-dns" value="8.8.8.8" class="text-input" style="width:110px" placeholder="DNS server">
+          <select id="np-samples" class="select-input">
+            <option value="3">3 次</option><option value="5" selected>5 次</option><option value="10">10 次</option>
+          </select>
+          <button class="btn btn-primary" id="btn-netperf">Ping / DNS 測試</button>
+        </div>
+      </div>
+
+      <div id="np-status" class="status-bar hidden"></div>
+
+      <!-- Ping / DNS cards -->
+      <div class="cards-row">
+        <div class="card"><div class="card-label">Ping 延遲</div><div class="card-val" id="np-ping">—</div><div class="card-sub" id="np-ping-g">—</div></div>
+        <div class="card"><div class="card-label">Ping Jitter</div><div class="card-val" id="np-jitter">—</div></div>
+        <div class="card"><div class="card-label">封包遺失</div><div class="card-val" id="np-loss">—</div></div>
+        <div class="card"><div class="card-label">DNS 解析</div><div class="card-val" id="np-dns-ms">—</div><div class="card-sub" id="np-dns-g">—</div></div>
+        <div class="card"><div class="card-label">HTTP TTFB</div><div class="card-val" id="np-http">—</div></div>
+      </div>
+
+      <!-- iperf3 section removed — use the dedicated iperf3 tab instead -->
+      <div class="iperf-section" style="display:none">
+
+        <!-- Server panel -->
+        <div class="iperf-panel" id="iperf-server-panel">
+          <div class="iperf-panel-title">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            iperf3 Server（此台電腦）
+            <span class="iperf-status-dot" id="iperf-srv-dot"></span>
+            <span class="iperf-status-label" id="iperf-srv-label">未啟動</span>
+          </div>
+
+          <div class="iperf-server-body">
+            <div class="iperf-server-left">
+              <div class="iperf-field-row">
+                <label>監聽 Port</label>
+                <input type="number" id="iperf-port" value="5201" min="1024" max="65535" class="text-input" style="width:80px">
+                <button class="iperf-toggle-btn" id="btn-iperf-toggle">
+                  <svg id="iperf-toggle-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  <span id="iperf-toggle-label">啟動 Server</span>
+                </button>
+              </div>
+
+              <div id="iperf-srv-info" class="iperf-srv-info hidden">
+                <div class="iperf-ip-list" id="iperf-ip-list"></div>
+                <div class="iperf-cmd-wrap">
+                  <code class="iperf-cmd" id="iperf-cmd-display">—</code>
+                  <button class="iperf-copy-btn" onclick="copyIperfCmd()">複製</button>
+                </div>
+                <div class="iperf-log-wrap">
+                  <div class="iperf-log-title">Server Log</div>
+                  <div class="iperf-log" id="iperf-log"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="iperf-qr-panel" id="iperf-qr-panel">
+              <div class="iperf-qr-hint">
+                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="rgba(255,255,255,.2)" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="5" y="5" width="3" height="3" fill="rgba(255,255,255,.2)"/><rect x="16" y="5" width="3" height="3" fill="rgba(255,255,255,.2)"/><rect x="5" y="16" width="3" height="3" fill="rgba(255,255,255,.2)"/><line x1="14" y1="14" x2="14" y2="21"/><line x1="14" y1="14" x2="21" y2="14"/><line x1="21" y1="17" x2="21" y2="21"/><line x1="17" y1="21" x2="21" y2="21"/></svg>
+                <span style="font-size:10px;color:var(--text-3)">啟動 Server 後顯示連線資訊</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Client test panel -->
+        <div class="iperf-panel" id="iperf-client-panel">
+          <div class="iperf-panel-title">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            iperf3 Client（測試吞吐量）
+          </div>
+
+          <div class="iperf-client-controls">
+            <div class="iperf-field-row">
+              <label>Server IP</label>
+              <input type="text" id="iperf-target" value="192.168.88.234" class="text-input" style="width:140px" placeholder="192.168.x.x">
+            </div>
+            <div class="iperf-field-row">
+              <label>Port</label>
+              <input type="number" id="iperf-client-port" value="5201" class="text-input" style="width:70px">
+            </div>
+            <div class="iperf-field-row">
+              <label>測試時間</label>
+              <select id="iperf-duration" class="select-input">
+                <option value="5">5 秒</option>
+                <option value="10" selected>10 秒</option>
+                <option value="30">30 秒</option>
+                <option value="60">60 秒</option>
+              </select>
+            </div>
+            <div class="iperf-field-row">
+              <label>模式</label>
+              <div class="iperf-mode-group" id="iperf-mode-group">
+                <button class="iperf-mode-btn active" data-mode="tcp_dl">TCP ↓下載</button>
+                <button class="iperf-mode-btn" data-mode="tcp_ul">TCP ↑上傳</button>
+                <button class="iperf-mode-btn" data-mode="tcp_bidir">TCP ↕雙向</button>
+                <button class="iperf-mode-btn" data-mode="udp">UDP</button>
+              </div>
+            </div>
+            <div class="iperf-field-row">
+              <label>並行串流</label>
+              <select id="iperf-streams" class="select-input">
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="8">8</option>
+              </select>
+            </div>
+            <button class="btn btn-success" id="btn-iperf-run" style="margin-top:6px">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              執行測試
+            </button>
+          </div>
+
+          <!-- iperf result cards -->
+          <div class="iperf-result-cards hidden" id="iperf-result-cards">
+            <div class="iperf-rcard" id="iperf-rc-dl"><div class="iperf-rcard-label">下載</div><div class="iperf-rcard-val" id="iperf-dl">—</div></div>
+            <div class="iperf-rcard" id="iperf-rc-ul" style="display:none"><div class="iperf-rcard-label">上傳</div><div class="iperf-rcard-val" id="iperf-ul">—</div></div>
+            <div class="iperf-rcard"><div class="iperf-rcard-label">Retransmits</div><div class="iperf-rcard-val" id="iperf-retrans">—</div></div>
+            <div class="iperf-rcard" id="iperf-rc-udp" style="display:none"><div class="iperf-rcard-label">UDP Jitter</div><div class="iperf-rcard-val" id="iperf-jitter">—</div></div>
+            <div class="iperf-rcard" id="iperf-rc-loss" style="display:none"><div class="iperf-rcard-label">封包遺失</div><div class="iperf-rcard-val" id="iperf-pkt-loss">—</div></div>
+          </div>
+
+          <!-- Throughput chart -->
+          <div id="iperf-chart-wrap" class="hidden" style="padding:8px 0 0">
+            <div class="section-title">每秒吞吐量</div>
+            <div style="height:160px;position:relative">
+              <canvas id="iperf-chart"></canvas>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /iperf-section -->
+
+      <!-- Ping / DNS history chart -->
+      <div class="chart-section">
+        <div class="section-title">Ping / DNS 歷史記錄</div>
+        <div class="chart-container" style="height:160px">
+          <canvas id="np-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Reference table -->
+      <div style="padding:0 20px 14px">
+        <div class="section-title">效能標準參考</div>
+        <table class="ref-table">
+          <tr><th>指標</th><th>優異</th><th>良好</th><th>普通</th><th>差</th></tr>
+          <tr><td>Ping 延遲</td><td>&lt;10ms</td><td>&lt;30ms</td><td>&lt;80ms</td><td>≥80ms</td></tr>
+          <tr><td>Ping Jitter</td><td>&lt;2ms</td><td>&lt;5ms</td><td>&lt;15ms</td><td>≥15ms</td></tr>
+          <tr><td>封包遺失</td><td>0%</td><td>&lt;0.5%</td><td>&lt;2%</td><td>≥2%</td></tr>
+          <tr><td>DNS</td><td>&lt;20ms</td><td>&lt;50ms</td><td>&lt;150ms</td><td>≥150ms</td></tr>
+          <tr><td>UDP Loss</td><td>0%</td><td>&lt;0.1%</td><td>&lt;1%</td><td>≥1%</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: iperf3 ═════════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-iperf">
+      <div class="tab-header">
+        <h1>iperf3 吞吐量測試</h1>
+        <div class="actions">
+          <span id="ip3-install-note" class="hidden" style="font-size:11px;color:#f97316">未安裝 → brew install iperf3</span>
+        </div>
+      </div>
+
+      <!-- ── 上半：Server + Client 控制 ────────────────────────────────── -->
+      <div class="ip3-top">
+
+        <!-- Server panel -->
+        <div class="ip3-card">
+          <div class="ip3-card-title">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            iperf3 Server（這台電腦）
+            <span class="ip3-dot" id="ip3-dot"></span>
+            <span class="ip3-dot-label" id="ip3-dot-label">未啟動</span>
+          </div>
+
+          <div class="ip3-row">
+            <label>Port</label>
+            <input type="number" id="ip3-srv-port" value="5201" class="text-input" style="width:72px">
+            <button class="ip3-srv-btn" id="ip3-srv-btn">
+              <svg id="ip3-srv-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <span id="ip3-srv-text">啟動 Server</span>
+            </button>
+          </div>
+
+          <div id="ip3-srv-info" class="ip3-srv-info hidden">
+            <div class="ip3-ip-row" id="ip3-ip-row"></div>
+            <div class="ip3-cmd-row">
+              <code class="ip3-cmd" id="ip3-cmd"></code>
+              <button class="ip3-copy" onclick="ip3Copy()">複製</button>
+            </div>
+            <div class="ip3-other-hint">
+              其他設備安裝 iperf3 後執行上方指令即可連線測試
+            </div>
+          </div>
+
+          <!-- Server log -->
+          <div id="ip3-srv-log-wrap" class="ip3-srv-log-wrap hidden">
+            <div class="ip3-log-title">Server 連線記錄</div>
+            <div class="ip3-log-box" id="ip3-srv-log"></div>
+          </div>
+        </div>
+
+        <!-- Client panel -->
+        <div class="ip3-card">
+          <div class="ip3-card-title">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Client 測試（量真實吞吐量）
+          </div>
+
+          <div class="ip3-row"><label>Server IP</label>
+            <input type="text" id="ip3-target" class="text-input" style="width:148px" placeholder="192.168.x.x"></div>
+          <div class="ip3-row"><label>Port</label>
+            <input type="number" id="ip3-port" value="5201" class="text-input" style="width:72px"></div>
+          <div class="ip3-row"><label>時間</label>
+            <select id="ip3-dur" class="select-input">
+              <option value="5">5 秒</option><option value="10" selected>10 秒</option>
+              <option value="30">30 秒</option><option value="60">60 秒</option>
+            </select>
+          </div>
+          <div class="ip3-row"><label>模式</label>
+            <div class="ip3-modes" id="ip3-modes">
+              <button class="ip3-mode active" data-mode="tcp_dl">TCP ↓</button>
+              <button class="ip3-mode" data-mode="tcp_ul">TCP ↑</button>
+              <button class="ip3-mode" data-mode="tcp_bidir">TCP ↕</button>
+              <button class="ip3-mode" data-mode="udp">UDP</button>
+            </div>
+          </div>
+          <div class="ip3-row"><label>串流</label>
+            <select id="ip3-streams" class="select-input">
+              <option value="1" selected>1</option><option value="2">2</option>
+              <option value="4">4</option><option value="8">8</option>
+            </select>
+          </div>
+          <button class="ip3-run-btn" id="ip3-run-btn">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            執行測試
+          </button>
+        </div>
+      </div>
+
+      <!-- ── 即時 Log + 圖表區 ──────────────────────────────────────────── -->
+      <div class="ip3-live-area" id="ip3-live-area">
+
+        <!-- Progress bar -->
+        <div class="ip3-progress-wrap hidden" id="ip3-progress-wrap">
+          <div class="ip3-progress-bar">
+            <div class="ip3-progress-fill" id="ip3-progress-fill"></div>
+          </div>
+          <span class="ip3-progress-label" id="ip3-progress-label">0 s / 10 s</span>
+        </div>
+
+        <!-- Live throughput numbers -->
+        <div class="ip3-live-nums hidden" id="ip3-live-nums">
+          <div class="ip3-live-num">
+            <div class="ip3-live-label">即時 Mbps</div>
+            <div class="ip3-live-val" id="ip3-live-mbps">—</div>
+          </div>
+          <div class="ip3-live-num">
+            <div class="ip3-live-label">峰值</div>
+            <div class="ip3-live-val" id="ip3-live-peak">—</div>
+          </div>
+          <div class="ip3-live-num">
+            <div class="ip3-live-label">平均</div>
+            <div class="ip3-live-val" id="ip3-live-avg">—</div>
+          </div>
+          <div class="ip3-live-num" id="ip3-live-retr-wrap">
+            <div class="ip3-live-label">Retransmits</div>
+            <div class="ip3-live-val" id="ip3-live-retr">—</div>
+          </div>
+        </div>
+
+        <!-- 即時圖 (Chart.js) -->
+        <div class="ip3-chart-wrap hidden" id="ip3-chart-wrap">
+          <div class="section-title" style="padding:0 0 4px">即時吞吐量（Mbps / 秒）</div>
+          <div style="height:140px;position:relative"><canvas id="ip3-chart"></canvas></div>
+        </div>
+
+        <!-- 即時 Log -->
+        <div class="ip3-log-section hidden" id="ip3-log-section">
+          <div class="section-title" style="padding:0 0 4px">iperf3 輸出 Log</div>
+          <div class="ip3-log-box ip3-log-tall" id="ip3-log-box"></div>
+        </div>
+      </div>
+
+      <!-- ── 分析結果（測試結束後顯示）────────────────────────────────── -->
+      <div class="ip3-analysis hidden" id="ip3-analysis">
+        <div class="ip3-analysis-title">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          測試結果分析
+        </div>
+
+        <!-- Score cards -->
+        <div class="ip3-score-cards" id="ip3-score-cards"></div>
+
+        <!-- Rating bars -->
+        <div class="ip3-rating-rows" id="ip3-rating-rows"></div>
+
+        <!-- Use cases -->
+        <div class="ip3-usecases" id="ip3-usecases"></div>
+
+        <!-- Recommendations -->
+        <div class="ip3-recs" id="ip3-recs"></div>
+      </div>
+
+    </div>
+
+    <!-- ═══ TAB: Report ══════════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-report">
+      <div class="tab-header">
+        <h1>勘測報告</h1>
+        <div class="actions">
+          <button class="diag-btn" id="btn-full-test">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.6 0 3.1.42 4.39 1.15"/><path d="M16 5l2 2 4-4"/></svg>
+            一鍵完整診斷
+          </button>
+          <button class="btn btn-primary" id="btn-gen-report">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>產生 PDF
+          </button>
+        </div>
+      </div>
+
+      <!-- 場地資訊 (compact) -->
+      <div class="report-form">
+        <div class="form-grid">
+          <div class="form-row"><label>場地名稱</label><input type="text" id="rep-site" placeholder="XX 公司 2F 辦公室"></div>
+          <div class="form-row"><label>客戶</label><input type="text" id="rep-client" placeholder="客戶公司"></div>
+          <div class="form-row"><label>勘測員</label><input type="text" id="rep-surveyor" placeholder="工程師姓名"></div>
+          <div class="form-row"><label>勘測日期</label><input type="date" id="rep-date"></div>
+        </div>
+      </div>
+
+      <div id="report-status" class="status-bar hidden"></div>
+
+      <!-- ── 診斷結果面板 ──────────────────────────────────────────────── -->
+      <div id="diag-panel" class="diag-panel hidden">
+
+        <!-- 進度步驟 -->
+        <div id="diag-progress" class="diag-progress-wrap">
+          <div class="diag-progress-title">正在執行完整診斷…</div>
+          <div id="diag-steps"></div>
+        </div>
+
+        <!-- 結果（進度完成後顯示） -->
+        <div id="diag-result" class="hidden">
+
+          <!-- 總分 gauge -->
+          <div class="diag-score-row">
+            <div class="diag-score-wrap">
+              <canvas id="diag-gauge" width="140" height="80"></canvas>
+              <div class="diag-score-num" id="diag-score-num">—</div>
+              <div class="diag-score-grade" id="diag-score-grade">—</div>
+            </div>
+            <div class="diag-counts" id="diag-counts"></div>
+            <div class="diag-summary" id="diag-summary"></div>
+          </div>
+
+          <!-- 問題清單 -->
+          <div class="diag-issues-wrap" id="diag-issues-wrap">
+            <div id="diag-issues-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 舊版預覽摘要 -->
+      <div class="report-preview" id="report-preview">
+        <div class="rp-title">報告預覽摘要</div>
+        <div id="rp-content" class="rp-content">
+          <p class="hint">點擊「一鍵完整診斷」取得完整優化建議，或執行掃描/分析後查看摘要。</p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="js/app.js"></script>
+<script src="js/spectrum.js"></script>
+<script src="js/scanner.js"></script>
+<script src="js/channels.js"></script>
+<script src="js/heatmap.js"></script>
+<script src="js/monitor.js"></script>
+<script src="js/netperf.js"></script>
+<script src="js/iperf3tab.js"></script>
+<script src="js/report.js"></script>
+<script src="js/fulltest.js"></script>
+</body>
+</html>

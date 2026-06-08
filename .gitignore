@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Build output
+build/
+dist/
+*.dmg
+*.spec.bak
+
+# macOS
+.DS_Store
+.AppleDouble
+*.localized
+
+# Logs / temp
+*.log
+wifi-app.txt

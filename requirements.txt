@@ -1,0 +1,31 @@
+# Wi-Fi Survey Pro v2.1 — macOS dependencies
+# Python 3.10+ required
+
+# Core Wi-Fi scanning (macOS CoreWLAN)
+pyobjc-framework-CoreWLAN>=10.0
+
+# Web server
+flask>=3.0
+
+# Image processing (heatmap)
+Pillow>=10.0
+numpy>=1.26
+
+# Heatmap interpolation (RBF — replaces IDW)
+scipy>=1.12
+
+# PDF report
+reportlab>=4.2
+
+# OUI vendor lookup (BSSID → manufacturer)
+mac-vendor-lookup>=0.1.12
+
+# Network performance testing
+ping3>=4.0
+dnspython>=2.4
+
+# Native window (optional but recommended)
+pywebview>=5.0
+
+# Installed on demand by mac-vendor-lookup
+# aiohttp, yarl, frozenlist, multidict
