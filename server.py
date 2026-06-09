@@ -32,6 +32,17 @@ _scan_lock    = threading.Lock()
 def index():
     return send_from_directory(_FRONTEND, "index.html")
 
+# ─── Interface selection ──────────────────────────────────────────────────────
+@app.route("/api/interfaces")
+def api_interfaces():
+    return jsonify({"ok": True, "interfaces": scanner.get_interfaces()})
+
+@app.route("/api/interface", methods=["POST"])
+def api_set_interface():
+    name = (request.get_json(silent=True) or {}).get("name", "")
+    scanner.set_interface(name)
+    return jsonify({"ok": True, "selected": name})
+
 # ─── Scanner ──────────────────────────────────────────────────────────────────
 @app.route("/api/scan")
 def api_scan():

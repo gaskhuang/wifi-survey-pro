@@ -11,6 +11,7 @@ import threading
 from typing import Optional
 
 _PLATFORM = platform.system()   # "Darwin" | "Windows" | "Linux"
+_selected_iface: str = ""       # "" = use system default
 from collections import deque
 
 # ─── OUI vendor lookup (lazy-loaded) ───────────────────────────────────────
@@ -330,6 +331,51 @@ def _channel_block(chan: int, width: str, band: str) -> list[int]:
     return [chan, chan]
 
 
+def get_interfaces() -> list[dict]:
+    """Return all available Wi-Fi interfaces."""
+    if _PLATFORM == "Windows":
+        import re, subprocess
+        out = subprocess.run(["netsh", "wlan", "show", "interfaces"],
+                             capture_output=True, text=True, errors="replace").stdout
+        names = re.findall(r"Name\s*:\s*(.+)", out)
+        return [{"name": n.strip(), "active": True} for n in names] or \
+               [{"name": "Wi-Fi", "active": True}]
+    try:
+        from CoreWLAN import CWWiFiClient
+        client = CWWiFiClient.sharedWiFiClient()
+        result = []
+        default = client.interface()
+        default_name = default.interfaceName() if default else ""
+        for iface in (client.interfaces() or [default]):
+            name = iface.interfaceName()
+            result.append({
+                "name": name,
+                "active": bool(iface.serviceActive()),
+                "default": name == default_name,
+            })
+        return result
+    except Exception:
+        return [{"name": "en0", "active": True, "default": True}]
+
+
+def set_interface(name: str) -> bool:
+    """Select which Wi-Fi interface to use for scanning."""
+    global _selected_iface
+    _selected_iface = name
+    return True
+
+
+def _get_iface():
+    """Return the CoreWLAN interface to use (selected or default)."""
+    from CoreWLAN import CWWiFiClient
+    client = CWWiFiClient.sharedWiFiClient()
+    if _selected_iface:
+        for iface in (client.interfaces() or []):
+            if iface.interfaceName() == _selected_iface:
+                return iface
+    return client.interface()
+
+
 def scan_networks() -> list[dict]:
     """Return sorted list of visible Wi-Fi networks (cross-platform)."""
     if _PLATFORM == "Windows":
@@ -337,9 +383,7 @@ def scan_networks() -> list[dict]:
         return _win()
     # macOS — CoreWLAN
     try:
-        from CoreWLAN import CWWiFiClient
-        client = CWWiFiClient.sharedWiFiClient()
-        iface  = client.interface()
+        iface = _get_iface()
         if iface is None:
             return []
         nets, err = iface.scanForNetworksWithName_error_(None, None)
@@ -360,8 +404,7 @@ def get_supported_bands() -> list[str]:
         from scanner_windows import get_supported_bands as _win
         return _win()
     try:
-        from CoreWLAN import CWWiFiClient
-        iface = CWWiFiClient.sharedWiFiClient().interface()
+        iface = _get_iface()
         if iface is None:
             return ["2.4GHz", "5GHz"]
         bands = set()
@@ -380,9 +423,7 @@ def current_connection() -> dict:
         from scanner_windows import current_connection as _win
         return _win()
     try:
-        from CoreWLAN import CWWiFiClient
-        client = CWWiFiClient.sharedWiFiClient()
-        iface  = client.interface()
+        iface = _get_iface()
         if iface is None:
             return {"connected": False}
 

@@ -39,6 +39,38 @@ async function checkBandSupport() {
 }
 checkBandSupport();
 
+// ── WiFi interface selector ───────────────────────────────────────────────────
+async function loadInterfaces() {
+  const sel = document.getElementById("iface-select");
+  if (!sel) return;
+  try {
+    const r = await fetch("/api/interfaces");
+    const d = await r.json();
+    const ifaces = d.interfaces || [];
+    sel.innerHTML = ifaces.map(i =>
+      `<option value="${i.name}">${i.name}${i.default ? " (預設)" : ""}${!i.active ? " ✗" : ""}</option>`
+    ).join("");
+    if (ifaces.length <= 1) {
+      sel.parentElement.style.display = "none"; // 只有一張卡就隱藏
+    }
+  } catch (_) {
+    sel.innerHTML = '<option value="">無法取得網卡</option>';
+  }
+}
+
+document.getElementById("iface-select")?.addEventListener("change", async e => {
+  const name = e.target.value;
+  await fetch("/api/interface", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ name }),
+  });
+  // 切換後自動重新掃描
+  document.getElementById("btn-scan")?.click();
+});
+
+loadInterfaces();
+
 // ── Current connection poller ─────────────────────────────────────────────────
 async function pollConnection() {
   try {
