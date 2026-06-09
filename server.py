@@ -251,6 +251,7 @@ def api_report():
     analysis     = data.get("analysis", {})
     measurements = heatmap_gen.get_measurements()
     heatmap_b64  = data.get("heatmap", "")
+    spectrum_b64 = data.get("spectrum", "")
 
     if not networks:
         networks = scanner.scan_networks()
@@ -258,7 +259,7 @@ def api_report():
         analysis = analyzer.analyze_channels(networks)
 
     pdf_bytes = reporter.generate_pdf(
-        site_info, networks, analysis, measurements, heatmap_b64
+        site_info, networks, analysis, measurements, heatmap_b64, spectrum_b64
     )
     ts = time.strftime("%Y%m%d_%H%M%S")
     return Response(

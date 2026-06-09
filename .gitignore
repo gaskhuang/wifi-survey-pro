@@ -8,9 +8,12 @@ venv/
 
 # Build output
 build/
+build_win/
 dist/
+dist_win/
 *.dmg
 *.spec.bak
+.venv_win/
 
 # macOS
 .DS_Store

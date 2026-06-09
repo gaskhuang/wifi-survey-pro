@@ -1,13 +1,16 @@
 """
-Wi-Fi Scanner — CoreWLAN (macOS) backend
+Wi-Fi Scanner — cross-platform
+  macOS  : CoreWLAN via PyObjC
+  Windows: netsh wlan (scanner_windows.py)
 Supports 2.4 / 5 / 6 GHz, Wi-Fi 4/5/6/6E/7 detection
-Includes: OUI vendor lookup, BSS Load IE parsing, first/last seen tracking,
-          composite quality scoring, per-network color assignment
 """
+import platform
 import struct
 import time
 import threading
 from typing import Optional
+
+_PLATFORM = platform.system()   # "Darwin" | "Windows" | "Linux"
 from collections import deque
 
 # ─── OUI vendor lookup (lazy-loaded) ───────────────────────────────────────
@@ -328,7 +331,11 @@ def _channel_block(chan: int, width: str, band: str) -> list[int]:
 
 
 def scan_networks() -> list[dict]:
-    """Return sorted list of visible Wi-Fi networks via CoreWLAN."""
+    """Return sorted list of visible Wi-Fi networks (cross-platform)."""
+    if _PLATFORM == "Windows":
+        from scanner_windows import scan_networks as _win
+        return _win()
+    # macOS — CoreWLAN
     try:
         from CoreWLAN import CWWiFiClient
         client = CWWiFiClient.sharedWiFiClient()
@@ -349,6 +356,9 @@ def scan_networks() -> list[dict]:
 
 def get_supported_bands() -> list[str]:
     """Return list of bands supported by the Wi-Fi adapter."""
+    if _PLATFORM == "Windows":
+        from scanner_windows import get_supported_bands as _win
+        return _win()
     try:
         from CoreWLAN import CWWiFiClient
         iface = CWWiFiClient.sharedWiFiClient().interface()
@@ -365,7 +375,10 @@ def get_supported_bands() -> list[str]:
 
 
 def current_connection() -> dict:
-    """Return current connection details from CWInterface + system_profiler."""
+    """Return current connection details (cross-platform)."""
+    if _PLATFORM == "Windows":
+        from scanner_windows import current_connection as _win
+        return _win()
     try:
         from CoreWLAN import CWWiFiClient
         client = CWWiFiClient.sharedWiFiClient()
