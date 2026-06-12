@@ -29,6 +29,12 @@
       <a href="#" class="nav-item" data-tab="channels">
         <svg viewBox="0 0 24 24"><rect x="2" y="3" width="4" height="18" rx="1"/><rect x="9" y="7" width="4" height="14" rx="1"/><rect x="16" y="10" width="4" height="11" rx="1"/></svg>頻道分析
       </a>
+      <a href="#" class="nav-item" data-tab="spectrumtab">
+        <svg viewBox="0 0 24 24"><path d="M2 12c2-7 4-7 6 0s4 7 6 0 4-7 6 0"/></svg>頻譜分析儀
+      </a>
+      <a href="#" class="nav-item" data-tab="stability">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="8 12 10.5 14.5 16 9"/></svg>穩定度分析
+      </a>
       <a href="#" class="nav-item" data-tab="heatmap">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>覆蓋熱圖
       </a>
@@ -186,6 +192,113 @@
       <div class="recs-section">
         <div class="section-title">優化建議</div>
         <div id="recs-list"></div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Spectrum Analyzer ══════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-spectrumtab">
+      <div class="tab-header">
+        <h1>頻譜分析儀</h1>
+        <div class="actions">
+          <div class="iperf-mode-group" id="spa-bands">
+            <button class="iperf-mode-btn active" data-band="2.4GHz">2.4 GHz</button>
+            <button class="iperf-mode-btn" data-band="5GHz">5 GHz</button>
+            <button class="iperf-mode-btn" data-band="6GHz">6 GHz</button>
+          </div>
+          <select id="spa-interval" class="select-input">
+            <option value="1">每秒</option>
+            <option value="2" selected>每 2 秒</option>
+            <option value="5">每 5 秒</option>
+          </select>
+          <button class="btn" id="spa-freeze">
+            <svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暫停
+          </button>
+        </div>
+      </div>
+
+      <div class="cards-row">
+        <div class="card"><div class="card-label">本頻段 AP 數</div><div class="card-val" id="spa-count">—</div></div>
+        <div class="card"><div class="card-label">最強訊號</div><div class="card-val" id="spa-strongest">—</div></div>
+        <div class="card"><div class="card-label">最壅塞頻道</div><div class="card-val" id="spa-busiest">—</div></div>
+        <div class="card"><div class="card-label">已掃描次數</div><div class="card-val" id="spa-sweeps">—</div></div>
+      </div>
+
+      <div class="chart-section" style="padding-bottom:4px">
+        <div class="section-title">即時頻譜（dBm）</div>
+        <div class="spa-canvas-wrap" style="height:240px;position:relative">
+          <canvas id="spa-live-canvas"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-section" style="flex:1;min-height:0;display:flex;flex-direction:column">
+        <div class="section-title">瀑布圖（新 → 舊，顏色 = 訊號強度）</div>
+        <div class="spa-canvas-wrap" style="flex:1;min-height:160px;position:relative">
+          <canvas id="spa-waterfall-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Stability ═══════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-stability">
+      <div class="tab-header">
+        <h1>連線穩定度分析</h1>
+        <div class="actions">
+          <select id="stab-duration" class="select-input">
+            <option value="30">30 秒</option>
+            <option value="60" selected>60 秒</option>
+            <option value="120">2 分鐘</option>
+          </select>
+          <button class="diag-btn" id="btn-stab-start">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="8 12 10.5 14.5 16 9"/></svg>
+            一鍵分析穩定度
+          </button>
+          <button class="btn btn-primary hidden" id="btn-stab-pdf">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>匯出 PDF
+          </button>
+        </div>
+      </div>
+
+      <div id="stab-status" class="status-bar hidden"></div>
+
+      <div class="cards-row">
+        <div class="card"><div class="card-label">即時 RSSI</div><div class="card-val" id="stab-rssi">—</div></div>
+        <div class="card"><div class="card-label">SNR</div><div class="card-val" id="stab-snr">—</div></div>
+        <div class="card"><div class="card-label">Ping 閘道器</div><div class="card-val" id="stab-gw">—</div></div>
+        <div class="card"><div class="card-label">Ping 外部</div><div class="card-val" id="stab-inet">—</div></div>
+        <div class="card"><div class="card-label">掉包</div><div class="card-val" id="stab-loss">—</div></div>
+        <div class="card"><div class="card-label">事件</div><div class="card-val" id="stab-events">—</div></div>
+      </div>
+
+      <!-- Progress -->
+      <div class="ip3-progress-wrap hidden" id="stab-progress-wrap" style="padding:0 20px 8px">
+        <div class="ip3-progress-bar">
+          <div class="ip3-progress-fill" id="stab-progress-fill"></div>
+        </div>
+        <span class="ip3-progress-label" id="stab-progress-label">0 s / 60 s</span>
+      </div>
+
+      <!-- Live chart -->
+      <div class="chart-section">
+        <div class="section-title">RSSI ＋ Ping 延遲時序</div>
+        <div class="chart-container" style="height:220px">
+          <canvas id="stab-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Result report -->
+      <div class="diag-panel hidden" id="stab-result" style="margin:0 20px 20px">
+        <div class="diag-score-row">
+          <div class="diag-score-wrap">
+            <canvas id="stab-gauge" width="140" height="80"></canvas>
+            <div class="diag-score-num" id="stab-score-num">—</div>
+            <div class="diag-score-grade" id="stab-score-grade">—</div>
+          </div>
+          <div class="diag-counts" id="stab-counts"></div>
+          <div class="diag-summary" id="stab-summary"></div>
+        </div>
+        <div class="diag-issues-wrap">
+          <div id="stab-findings-list"></div>
+        </div>
       </div>
     </div>
 
@@ -687,5 +800,7 @@
 <script src="js/iperf3tab.js"></script>
 <script src="js/report.js"></script>
 <script src="js/fulltest.js"></script>
+<script src="js/spectrumtab.js"></script>
+<script src="js/stability.js"></script>
 </body>
 </html>

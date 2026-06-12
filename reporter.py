@@ -348,6 +348,174 @@ def _build_pdf(site_info, networks, analysis, measurements,
     return buf.read()
 
 
+# ── Stability report ───────────────────────────────────────────────────────────
+def generate_stability_pdf(result: dict, chart_b64: str = "",
+                           site_info: dict | None = None) -> bytes:
+    """連線穩定度分析 PDF：評分、統計、事件、發現與建議、時序圖。"""
+    try:
+        from reportlab.lib.pagesizes import A4  # noqa: F401 — probe availability
+        return _build_stability_pdf(result, chart_b64, site_info or {})
+    except ImportError:
+        return _fallback_stability_html(result).encode()
+
+
+def _build_stability_pdf(result, chart_b64, site_info):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, HRFlowable,
+        Image as RLImage,
+    )
+
+    FONT = _register_fonts()
+    buf  = io.BytesIO()
+    doc  = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=2*cm, rightMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm,
+        title="Wi-Fi Connection Stability Report")
+
+    BLUE  = colors.HexColor("#1e40af")
+    BLUE2 = colors.HexColor("#1d4ed8")
+    GRAY  = colors.HexColor("#64748b")
+
+    def st(name, size, color=colors.black, align=TA_LEFT, space_after=4):
+        return ParagraphStyle(name, fontName=FONT, fontSize=size,
+                              textColor=color, alignment=align,
+                              spaceAfter=space_after, leading=size*1.4)
+
+    H1   = st("H1", 18, color=BLUE,  align=TA_CENTER, space_after=8)
+    H1s  = st("H1s", 11, color=GRAY, align=TA_CENTER, space_after=12)
+    H2   = st("H2", 13, color=BLUE2, space_after=6)
+    BODY = st("Body", 9, space_after=3)
+    SMAL = st("Smal", 8, color=GRAY, space_after=2)
+
+    grade = result.get("grade", {})
+    score = result.get("score", 0)
+    gcol  = colors.HexColor(grade.get("color", "#64748b"))
+    BIG   = st("Big", 26, color=gcol, align=TA_CENTER, space_after=2)
+    GLAB  = st("Glab", 13, color=gcol, align=TA_CENTER, space_after=12)
+
+    story = [
+        Paragraph("Wi-Fi 連線穩定度報告", H1),
+        Paragraph("Wi-Fi Connection Stability Report", H1s),
+        HRFlowable(width="100%", thickness=2, color=BLUE),
+        Spacer(1, 0.5*cm),
+    ]
+
+    # ── 受測連線 ──
+    info_rows = [
+        ["SSID",     str(result.get("ssid", "—"))],
+        ["BSSID",    str(result.get("bssid", "—"))],
+        ["頻道",     (f"{result.get('band') or ''} ch{result.get('channel')}".strip()
+                      if result.get("channel") else "—")],
+        ["標準",     str(result.get("standard") or "—")],
+        ["測試時間", f"{result.get('tested_at', '—')}（{result.get('duration', 0)} 秒）"],
+        ["取樣數",   f"{result.get('sample_count', 0)} 點"],
+    ]
+    if site_info.get("site"):
+        info_rows.insert(0, ["場地", site_info["site"]])
+    story += [Paragraph("一、受測連線", H2),
+              _kv_table(info_rows, FONT), Spacer(1, 0.5*cm)]
+
+    # ── 總評 ──
+    story += [
+        Paragraph("二、穩定度總評", H2),
+        Paragraph(f"{score} / 100", BIG),
+        Paragraph(f"{grade.get('emoji','')} {grade.get('label','—')}", GLAB),
+    ]
+
+    # ── 統計 ──
+    rssi, snr, tx = result.get("rssi", {}), result.get("snr", {}), result.get("tx", {})
+    def fmt(v, unit=""):
+        return f"{v}{unit}" if v is not None else "—"
+    stat_rows = [["指標", "平均", "最小", "最大", "波動（標準差/抖動）"]]
+    stat_rows.append(["RSSI (dBm)", fmt(rssi.get("mean")), fmt(rssi.get("min")),
+                      fmt(rssi.get("max")), fmt(rssi.get("std"))])
+    stat_rows.append(["SNR (dB)", fmt(snr.get("mean")), fmt(snr.get("min")),
+                      fmt(snr.get("max")), fmt(snr.get("std"))])
+    stat_rows.append(["Tx Rate (Mbps)", fmt(tx.get("mean")), fmt(tx.get("min")),
+                      fmt(tx.get("max")), fmt(tx.get("std"))])
+    for key, label in (("ping_gw", "Ping 閘道器"), ("ping_inet", "Ping 外部")):
+        p = result.get(key)
+        if p and p.get("sent"):
+            stat_rows.append([
+                f"{label} {p.get('host','')} (ms)",
+                fmt(p.get("avg_ms")), fmt(p.get("min_ms")), fmt(p.get("max_ms")),
+                f"抖動 {fmt(p.get('jitter_ms'))} / 掉包 {fmt(p.get('loss_pct'),'%')}",
+            ])
+    story += [Paragraph("三、量測統計", H2),
+              _data_table(stat_rows, FONT, BLUE, header=True),
+              Spacer(1, 0.5*cm)]
+
+    # ── 時序圖 ──
+    if chart_b64:
+        story.append(Paragraph("四、訊號與延遲時序圖", H2))
+        try:
+            img_buf = io.BytesIO(base64.b64decode(chart_b64.split(",")[-1]))
+            story += [RLImage(img_buf, width=16*cm, height=7*cm),
+                      Spacer(1, 0.5*cm)]
+        except Exception as e:
+            story.append(Paragraph(f"（圖表載入失敗：{e}）", SMAL))
+
+    # ── 事件 ──
+    events = result.get("events", [])
+    sec = "五" if chart_b64 else "四"
+    story.append(Paragraph(f"{sec}、事件記錄", H2))
+    if events:
+        ev_rows = [["時間 (秒)", "類型", "說明"]]
+        type_label = {"roam": "漫遊", "disconnect": "斷線",
+                      "reconnect": "重連", "channel_change": "頻道切換"}
+        for e in events:
+            ev_rows.append([f"{e['t']:.0f}",
+                            type_label.get(e["type"], e["type"]), e["detail"]])
+        story.append(_data_table(ev_rows, FONT, BLUE, header=True))
+    else:
+        story.append(Paragraph("測試期間無漫遊、斷線或頻道切換事件。", BODY))
+    story.append(Spacer(1, 0.5*cm))
+
+    # ── 發現與建議 ──
+    sec2 = "六" if chart_b64 else "五"
+    story.append(Paragraph(f"{sec2}、發現與建議", H2))
+    SEV_LABEL = {"critical": "【嚴重】", "warning": "【警告】",
+                 "info": "【建議】", "good": "【良好】"}
+    SEV_COLOR = {"critical": "#dc2626", "warning": "#ca8a04",
+                 "info": "#2563eb", "good": "#16a34a"}
+    for f in result.get("findings", []):
+        c = SEV_COLOR.get(f["severity"], "#000000")
+        story.append(Paragraph(
+            f'<font color="{c}">{SEV_LABEL.get(f["severity"], "")}'
+            f'{f["title"]}</font>', BODY))
+        if f.get("detail"):
+            story.append(Paragraph(f'　{f["detail"]}', SMAL))
+        story.append(Paragraph(f'　→ {f["recommendation"]}', SMAL))
+        story.append(Spacer(1, 0.15*cm))
+
+    story += [
+        Spacer(1, 0.6*cm),
+        HRFlowable(width="100%", thickness=0.8, color=GRAY),
+        Paragraph(f"由 Wi-Fi Survey Pro 產生 · {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                  st("Foot", 8, color=GRAY, align=TA_CENTER)),
+    ]
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.read()
+
+
+def _fallback_stability_html(result) -> str:
+    grade = result.get("grade", {})
+    rows = "\n".join(
+        f"<li>[{f['severity']}] {f['title']} — {f['recommendation']}</li>"
+        for f in result.get("findings", []))
+    return f"""<html><meta charset="utf-8"><body>
+<h1>Wi-Fi 連線穩定度報告</h1>
+<p>SSID: {result.get('ssid')} ｜ 分數: {result.get('score')}/100
+（{grade.get('label','')}）</p><ul>{rows}</ul></body></html>"""
+
+
 # ── Table helpers ──────────────────────────────────────────────────────────────
 def _kv_table(data, font, col_w=None, font_size=9):
     from reportlab.platypus import Table, TableStyle

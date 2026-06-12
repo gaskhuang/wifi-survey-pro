@@ -16,6 +16,7 @@ import heatmap_gen
 import reporter
 import recommender
 import iperf3_mgr
+import stability
 
 # When frozen by PyInstaller, resources live in sys._MEIPASS
 _BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -344,6 +345,47 @@ def api_iperf_stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ─── Connection stability test ──────────────────────────────────────────────
+@app.route("/api/stability/start", methods=["POST"])
+def api_stability_start():
+    data     = request.get_json(silent=True) or {}
+    duration = int(data.get("duration", 60))
+    host     = data.get("host", "8.8.8.8")
+    ok = stability.TEST.start(duration, host)
+    return jsonify({"ok": ok, "error": None if ok else "測試進行中，請稍候"})
+
+
+@app.route("/api/stability/stop", methods=["POST"])
+def api_stability_stop():
+    stability.TEST.stop()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/stability/status")
+def api_stability_status():
+    return jsonify(stability.TEST.status())
+
+
+@app.route("/api/stability/result")
+def api_stability_result():
+    r = stability.TEST.result_data
+    return jsonify({"ok": bool(r), "result": r})
+
+
+@app.route("/api/stability/report", methods=["POST"])
+def api_stability_report():
+    data = request.get_json(silent=True) or {}
+    r = stability.TEST.result_data
+    if not r:
+        return jsonify({"ok": False, "error": "尚無測試結果，請先執行穩定度分析"}), 400
+    pdf_bytes = reporter.generate_stability_pdf(
+        r, data.get("chart", ""), data.get("site_info", {}))
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    return Response(
+        pdf_bytes, mimetype="application/pdf",
+        headers={"Content-Disposition": f"attachment;filename=wifi_stability_{ts}.pdf"})
 
 
 # ─── Full diagnostic test ────────────────────────────────────────────────────
