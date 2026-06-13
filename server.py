@@ -17,6 +17,8 @@ import reporter
 import recommender
 import iperf3_mgr
 import stability
+import speedtest_cf
+import ai_advisor
 
 # When frozen by PyInstaller, resources live in sys._MEIPASS
 _BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -347,6 +349,105 @@ def api_iperf_stream():
     )
 
 
+# ─── One-tap diagnose pipeline (SSE) ─────────────────────────────────────────
+@app.route("/api/diagnose/stream")
+def api_diagnose_stream():
+    """
+    一鍵診斷完整管線（SSE）：
+    掃描 → 頻道分析 → 連線狀態 → Ping/DNS → 速度測試 → 穩定度 → AI 建議
+    事件：step（進度）/ partial（各區結果）/ done（完整彙整）
+    """
+    duration = max(10, min(120, int(request.args.get("duration", 30))))
+    do_speed = request.args.get("speedtest", "1") == "1"
+    do_ai    = request.args.get("ai", "1") == "1"
+
+    def ev(etype, data):
+        return f"event: {etype}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+    def gen():
+        results: dict = {}
+
+        def run_step(key, label, fn):
+            yield ev("step", {"key": key, "label": label, "status": "running"})
+            try:
+                results[key] = fn()
+                yield ev("step", {"key": key, "label": label, "status": "ok"})
+                yield ev("partial", {"key": key, "data": results[key]})
+            except Exception as e:
+                results[key] = None
+                yield ev("step", {"key": key, "label": label,
+                                  "status": "fail", "error": str(e)})
+
+        # 1-4: 快速項目
+        yield from run_step("scan",    "Wi-Fi 環境掃描",        scanner.scan_networks)
+        yield from run_step("analysis","頻道分析",
+                            lambda: analyzer.analyze_channels(results.get("scan") or []))
+        yield from run_step("current", "目前連線狀態",          scanner.current_connection)
+        yield from run_step("netperf", "Ping / DNS 延遲測試",
+                            lambda: scanner.test_network_performance("8.8.8.8", "8.8.8.8", 5))
+
+        # 5: 速度測試
+        if do_speed:
+            yield from run_step("speedtest", "網路速度測試（上傳/下載）",
+                                speedtest_cf.run_speedtest)
+
+        # 6: 穩定度（背景跑 + 進度回報）
+        yield ev("step", {"key": "stability", "label": f"連線穩定度測試（{duration} 秒）",
+                          "status": "running"})
+        if stability.TEST.start(duration):
+            while True:
+                st = stability.TEST.status()
+                if not st["running"]:
+                    break
+                yield ev("progress", {"key": "stability",
+                                      "elapsed": st["elapsed"],
+                                      "total":   st["duration"]})
+                time.sleep(2)
+            results["stability"] = stability.TEST.result_data
+            yield ev("step", {"key": "stability", "label": "連線穩定度測試",
+                              "status": "ok"})
+            yield ev("partial", {"key": "stability", "data": results["stability"]})
+        else:
+            yield ev("step", {"key": "stability", "label": "連線穩定度測試",
+                              "status": "fail", "error": "已有穩定度測試進行中"})
+
+        # 7: AI 分析（背景執行 + 心跳，讓前端顯示經過時間）
+        if do_ai:
+            provider_hint = "Codex AI" if ai_advisor.codex_available() else "離線規則引擎"
+            yield ev("step", {"key": "ai", "label": f"AI 智慧分析（{provider_hint}）",
+                              "status": "running"})
+            holder: dict = {}
+            def _ai():
+                holder["r"] = ai_advisor.analyze(
+                    results.get("scan") or [],
+                    results.get("analysis") or {},
+                    results.get("current") or {},
+                    results.get("netperf") or {},
+                    results.get("speedtest"),
+                    results.get("stability"))
+            t = threading.Thread(target=_ai, daemon=True)
+            t.start()
+            waited = 0
+            while t.is_alive() and waited < ai_advisor.CODEX_TIMEOUT + 30:
+                time.sleep(2)
+                waited += 2
+                yield ev("progress", {"key": "ai", "elapsed": waited})
+            ai_result = holder.get("r") or {"ok": False, "provider": "none",
+                                            "summary": "", "score": 0, "items": []}
+            results["ai"] = ai_result
+            yield ev("step", {"key": "ai", "label": "AI 智慧分析",
+                              "status": "ok" if ai_result.get("ok") else "fail"})
+            yield ev("partial", {"key": "ai", "data": ai_result})
+
+        yield ev("done", {"ok": True})
+
+    return Response(
+        stream_with_context(gen()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ─── Connection stability test ──────────────────────────────────────────────
 @app.route("/api/stability/start", methods=["POST"])
 def api_stability_start():
@@ -447,6 +548,7 @@ def api_info():
         "platform": platform.platform(),
         "corewlan": _check_corewlan(),
         "bands":    scanner.get_supported_bands(),
+        "ai_provider": "codex" if ai_advisor.codex_available() else "rules",
     })
 
 

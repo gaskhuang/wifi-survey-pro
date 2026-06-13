@@ -23,7 +23,10 @@
     </div>
 
     <nav>
-      <a href="#" class="nav-item active" data-tab="scanner">
+      <a href="#" class="nav-item active" data-tab="diagnose">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg>現場診斷
+      </a>
+      <a href="#" class="nav-item" data-tab="scanner">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>掃描
       </a>
       <a href="#" class="nav-item" data-tab="channels">
@@ -75,8 +78,64 @@
 
   <main id="content">
 
+    <!-- ═══ TAB: Diagnose (one-tap home) ════════════════════════════════════ -->
+    <div class="tab-pane active" id="tab-diagnose">
+      <div class="tab-header">
+        <h1>現場診斷</h1>
+        <div class="actions">
+          <label style="font-size:11px;color:var(--text-2)">穩定度時長</label>
+          <select id="dg-duration" class="select-input">
+            <option value="30" selected>30 秒</option>
+            <option value="60">60 秒</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="flex:1;overflow-y:auto;min-height:0">
+
+        <!-- Hero：一個大按鈕 -->
+        <div id="dg-hero" class="dg-hero">
+          <button id="btn-dg-start" class="dg-bigbtn">
+            <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M1.05 12C4 7.5 8 5 12 5s8 2.5 10.95 7"/>
+              <path d="M5 16.5C7 14 9.5 13 12 13s5 1 7 3.5"/>
+              <circle cx="12" cy="20" r="1.5" fill="currentColor"/>
+            </svg>
+            <span class="dg-bigbtn-label">開始診斷</span>
+          </button>
+          <div class="dg-hint">
+            一鍵完成：環境掃描 → 頻道分析 → Ping 測試 → 速度測試 → 穩定度測試 → AI 建議行動
+          </div>
+          <div class="dg-hint" id="dg-ai-provider" style="margin-top:4px;font-size:10px"></div>
+        </div>
+
+        <!-- 進度 -->
+        <div id="dg-progress" class="hidden" style="padding:8px 20px 0">
+          <div class="diag-progress-title">正在執行現場診斷…</div>
+          <div id="dg-steps"></div>
+        </div>
+
+        <!-- 結果 -->
+        <div id="dg-result" class="hidden">
+          <div class="cards-row" id="dg-cards"></div>
+
+          <div class="chart-section" style="padding-bottom:4px">
+            <div class="section-title">頻道佔用一覽（<span style="color:#22c55e">綠框 = 建議的乾淨頻道</span>）</div>
+            <div style="height:150px;position:relative"><canvas id="dg-chchart"></canvas></div>
+          </div>
+
+          <!-- AI 建議（版面最大區） -->
+          <div class="diag-panel" id="dg-ai-panel" style="margin:12px 20px 20px;display:block">
+            <div id="dg-ai-summary" class="dg-ai-summary"></div>
+            <div id="dg-ai-list"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <!-- ═══ TAB: Scanner ═════════════════════════════════════════════════════ -->
-    <div class="tab-pane active" id="tab-scanner">
+    <div class="tab-pane" id="tab-scanner">
 
       <!-- WiFi Explorer style toolbar -->
       <div class="we-toolbar">
@@ -802,5 +861,6 @@
 <script src="js/fulltest.js"></script>
 <script src="js/spectrumtab.js"></script>
 <script src="js/stability.js"></script>
+<script src="js/diagnose.js"></script>
 </body>
 </html>
