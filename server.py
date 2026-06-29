@@ -15,6 +15,7 @@ import analyzer
 import heatmap_gen
 import reporter
 import recommender
+import recommendations
 import iperf3_mgr
 import stability
 import speedtest_cf
@@ -91,6 +92,35 @@ def api_analyze():
         nets = scanner.scan_networks()
     result = analyzer.analyze_channels(nets)
     return jsonify({"ok": True, "analysis": result, "networks": nets})
+
+
+# ─── 統一優化建議（每個功能跑完都能取得對應建議方案）──────────────────────────
+@app.route("/api/recommend", methods=["POST"])
+def api_recommend():
+    """各分頁測試完成後呼叫，回傳聚焦該功能的優化建議方案。
+    body: {context: "scan|netperf|spectrum|heatmap|monitor", ...payload}
+    需要鄰居 AP / 目前連線時，後端會自行掃描補齊（除非 payload 已附帶）。"""
+    data    = request.get_json(silent=True) or {}
+    context = data.get("context", "scan")
+
+    # 需要 networks 的情境：scan / spectrum（沒帶就現場掃一次）
+    networks = data.get("networks")
+    if networks is None and context in ("scan", "spectrum"):
+        networks = scanner.scan_networks()
+    networks = networks or []
+
+    current = data.get("current")
+    if current is None:
+        try:
+            current = scanner.current_connection() or {}
+        except Exception:
+            current = {}
+
+    try:
+        assessment = recommendations.assess(context, data, networks, current)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "context": context, "assessment": assessment})
 
 
 # ─── Heatmap endpoints ────────────────────────────────────────────────────────

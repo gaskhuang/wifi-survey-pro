@@ -1,7 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    spectrumtab.js — 頻譜分析儀分頁
    · 單頻段放大即時頻譜（Y 軸 = dBm），bell-curve 每 AP 一條
-   · 時間瀑布圖（waterfall）：新掃描在最上方，顏色 = 訊號強度
+   · 時間瀑布圖（waterfall）：2D 熱力圖 / 3D 堆疊立體圖（可拖曳旋轉視角）
+   · Max Hold（峰值保持）、移動平均基線、Peak Search 峰值標記
+   · 錄製 / 儲存 / 載入 / 回放（仿 NXT-2000 .nxt sweep buffer）
    · 頻段切換 2.4 / 5 / 6 GHz、掃描間隔、凍結
    只在分頁可見時輪詢 /api/scan，避免背景浪費。
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -20,6 +22,9 @@ const SpectrumTab = (() => {
   };
   const N_BINS   = 600;   // waterfall frequency resolution
   const MAX_ROWS = 160;   // waterfall history depth
+  const ROWS_3D  = 70;    // 3D 立體瀑布最大堆疊列數
+  const MAX_REC  = 3000;  // 錄製緩衝最大 sweep 數
+  const AVG_A    = 0.2;   // 移動平均 EMA 係數
   const ML = 44, MR = 14, MT = 10, MB = 24;          // live chart margins
   const DB_TOP = -20, DB_BOT = -100;
 
@@ -30,6 +35,27 @@ const SpectrumTab = (() => {
   let _lastNets = [];
   let _curBssid = "";
   let _timer    = null;
+
+  // ── 疊加分析狀態 ────────────────────────────────────────────────────────────
+  let _maxHold    = new Float32Array(N_BINS);
+  let _avgBins    = new Float32Array(N_BINS);
+  let _avgInit    = false;
+  let _showMaxHold = true;
+  let _showAvg     = false;
+  let _showPeak    = true;
+
+  // ── 瀑布視圖 ────────────────────────────────────────────────────────────────
+  let _wfMode = "2d";                              // "2d" | "3d"
+  const _d3   = { skewX: 0.42, depthY: 0.60, amp: 0.85 };   // 3D 視角參數
+  let _wf3dBound = false;
+
+  // ── 錄製 / 回放 ─────────────────────────────────────────────────────────────
+  let _mode      = "live";   // "live" | "playback"
+  let _recording = false;
+  let _recBuf    = [];       // [{t, nets}]
+  let _playing   = false;
+  let _playIdx   = 0;
+  let _playTimer = null;
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const chFreq = (ch, band) =>
@@ -54,6 +80,7 @@ const SpectrumTab = (() => {
   }
 
   const rssiNorm = rssi => Math.max(0, Math.min(1, (rssi + 100) / 80));
+  const normToDb = v    => v * 80 - 100;                  // rssiNorm 的反函數
 
   // ── Waterfall colormap: black → blue → cyan → green → yellow → red ────────
   const CMAP = [
@@ -70,6 +97,7 @@ const SpectrumTab = (() => {
     }
     return CMAP[CMAP.length - 1][1];
   }
+  const rgbStr = (rgb, a) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
 
   // ── Scan loop（鏈式 setTimeout，等掃描回來才排下一次）──────────────────────
   function active() {
@@ -77,7 +105,7 @@ const SpectrumTab = (() => {
   }
 
   async function tick() {
-    if (active() && !_frozen) {
+    if (active() && !_frozen && _mode === "live") {
       try {
         const [scanR, curR] = await Promise.all([
           fetch("/api/scan").then(r => r.json()),
@@ -86,7 +114,12 @@ const SpectrumTab = (() => {
         _lastNets = scanR.networks || [];
         _curBssid = curR.connected ? (curR.bssid || "") : "";
         _sweeps++;
-        pushRow(_lastNets);
+        pushSweep(_lastNets);
+        if (_recording) {
+          _recBuf.push({ t: Date.now(), nets: _lastNets });
+          if (_recBuf.length > MAX_REC) _recBuf.shift();
+          updateRecLabel();
+        }
         render();
       } catch (_) {}
     }
@@ -94,8 +127,8 @@ const SpectrumTab = (() => {
     _timer = setTimeout(tick, iv * 1000);
   }
 
-  // ── Waterfall data ─────────────────────────────────────────────────────────
-  function pushRow(nets) {
+  // ── Waterfall / 疊加資料 ─────────────────────────────────────────────────────
+  function computeBins(nets) {
     const [fMin, fMax] = BAND_FREQ[_band];
     const bins = new Float32Array(N_BINS);
     for (const n of nets) {
@@ -113,14 +146,33 @@ const SpectrumTab = (() => {
         if (v > bins[b]) bins[b] = v;
       }
     }
+    return bins;
+  }
+
+  function pushSweep(nets) {
+    const bins = computeBins(nets);
+    for (let b = 0; b < N_BINS; b++) {
+      if (bins[b] > _maxHold[b]) _maxHold[b] = bins[b];
+      _avgBins[b] = _avgInit ? _avgBins[b] * (1 - AVG_A) + bins[b] * AVG_A : bins[b];
+    }
+    _avgInit = true;
     _rows.unshift({ bins });
     if (_rows.length > MAX_ROWS) _rows.length = MAX_ROWS;
+  }
+
+  // 切頻段 / 載入錄製 / 重置時清空所有累積狀態
+  function resetSpectrumState() {
+    _rows = [];
+    _maxHold = new Float32Array(N_BINS);
+    _avgBins = new Float32Array(N_BINS);
+    _avgInit = false;
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
   function render() {
     drawLive();
-    drawWaterfall();
+    if (_wfMode === "3d") draw3DWaterfall();
+    else                  drawWaterfall();
     updateCards();
   }
 
@@ -146,6 +198,12 @@ const SpectrumTab = (() => {
   }
   const dbToY = (db, H) =>
     MT + (DB_TOP - db) / (DB_TOP - DB_BOT) * (H - MT - MB);
+
+  // bin 索引 → 該 bin 中心頻率對應的螢幕 X
+  function binToX(b, W) {
+    const [fMin, fMax] = BAND_FREQ[_band];
+    return freqToX(fMin + (b + 0.5) / N_BINS * (fMax - fMin), W);
+  }
 
   function drawLive() {
     const c = setupCanvas("spa-live-canvas");
@@ -220,6 +278,82 @@ const SpectrumTab = (() => {
       ctx.fillText(label, xP, yTop - 6);
     }
 
+    // ── 疊加：移動平均基線（先畫，墊在最底）──────────────────────────────────
+    if (_showAvg && _avgInit) {
+      ctx.beginPath();
+      let started = false;
+      for (let b = 0; b < N_BINS; b++) {
+        if (_avgBins[b] <= 0.001) { started = false; continue; }
+        const x = binToX(b, W), y = dbToY(normToDb(_avgBins[b]), H);
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = "rgba(148,163,184,.85)";
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // ── 疊加：Max Hold 峰值保持線 ───────────────────────────────────────────
+    if (_showMaxHold) {
+      ctx.beginPath();
+      let started = false;
+      for (let b = 0; b < N_BINS; b++) {
+        if (_maxHold[b] <= 0.001) { started = false; continue; }
+        const x = binToX(b, W), y = dbToY(normToDb(_maxHold[b]), H);
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = "rgba(251,191,36,.95)";   // amber
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+
+    // ── 疊加：Peak Search 峰值標記（本頻段最強 AP）──────────────────────────
+    if (_showPeak && nets.length) {
+      const top = nets[nets.length - 1];            // nets 已由弱到強排序
+      const w = parseInt(top.width) || 20;
+      const [fL, fR] = chBlockFreq(top.channel, w, _band);
+      const xP = freqToX((fL + fR) / 2, W);
+      const yP = dbToY(Math.max(DB_BOT, Math.min(DB_TOP, top.rssi)), H);
+      ctx.strokeStyle = "#f43f5e";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(xP, MT); ctx.lineTo(xP, H - MB);
+      ctx.moveTo(ML, yP); ctx.lineTo(W - MR, yP);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(xP, yP, 4, 0, Math.PI * 2);
+      ctx.fillStyle = "#f43f5e";
+      ctx.fill();
+      const ssid = (top.ssid && !top.ssid.startsWith("<")) ? top.ssid : "(隱藏)";
+      const txt = `▲ 峰值 ${top.rssi} dBm · ch${top.channel} · ${ssid}`;
+      ctx.font = "600 10px -apple-system";
+      ctx.textAlign = xP > W / 2 ? "right" : "left";
+      const tx = xP > W / 2 ? xP - 8 : xP + 8;
+      const tw = ctx.measureText(txt).width;
+      ctx.fillStyle = "#0b0d14d0";
+      ctx.fillRect(ctx.textAlign === "right" ? tx - tw - 4 : tx - 4, yP - 22, tw + 8, 14);
+      ctx.fillStyle = "#fda4af";
+      ctx.fillText(txt, tx, yP - 12);
+    }
+
+    // 圖例
+    if (_showMaxHold || _showAvg) {
+      ctx.font = "9px -apple-system";
+      ctx.textAlign = "left";
+      let lx = ML + 4;
+      if (_showMaxHold) {
+        ctx.fillStyle = "rgba(251,191,36,.95)"; ctx.fillRect(lx, MT + 2, 14, 2);
+        ctx.fillText("Max Hold", lx + 18, MT + 6); lx += 78;
+      }
+      if (_showAvg) {
+        ctx.fillStyle = "rgba(148,163,184,.85)"; ctx.fillRect(lx, MT + 2, 14, 2);
+        ctx.fillText("平均", lx + 18, MT + 6);
+      }
+    }
+
     if (!nets.length) {
       ctx.fillStyle = "rgba(255,255,255,.25)";
       ctx.font = "12px -apple-system";
@@ -232,7 +366,6 @@ const SpectrumTab = (() => {
     const c = setupCanvas("spa-waterfall-canvas");
     if (!c) return;
     const { ctx, W, H } = c;
-    const dpr = window.devicePixelRatio || 1;
 
     ctx.fillStyle = "#0b0d14";
     ctx.fillRect(0, 0, W, H);
@@ -287,6 +420,117 @@ const SpectrumTab = (() => {
     ctx.restore();
   }
 
+  // ── 3D 立體瀑布（純 canvas 斜投影堆疊脊線，可拖曳旋轉視角）──────────────────
+  function draw3DWaterfall() {
+    const c = setupCanvas("spa-waterfall-canvas");
+    if (!c) return;
+    const { ctx, W, H } = c;
+    bind3DInteraction();
+
+    ctx.fillStyle = "#080a11";
+    ctx.fillRect(0, 0, W, H);
+
+    const R = Math.min(_rows.length, ROWS_3D);
+    if (!R) {
+      ctx.fillStyle = "rgba(255,255,255,.25)";
+      ctx.font = "12px -apple-system";
+      ctx.textAlign = "center";
+      ctx.fillText("等待掃描資料…", W / 2, H / 2);
+      return;
+    }
+
+    const padL = ML, padR = MR + 10, padT = 14, padB = 22;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+    const shiftXmax = plotW * 0.30 * _d3.skewX;       // 最深一列的水平位移
+    const baseW     = plotW - Math.abs(shiftXmax);    // 最前列寬度
+    const depthYpx  = plotH * _d3.depthY;             // 由前到後抬升高度
+    const ampH      = plotH * 0.34 * _d3.amp;         // 振幅最大像素高
+    const frontY    = padT + plotH - 4;               // 最前（最新）一列基線 Y
+    const STEP = 3;                                    // bin 取樣步距（效能）
+
+    const originX = dz => padL + Math.max(0, shiftXmax) - shiftXmax * dz;
+    const rowW    = dz => baseW;
+    const baseYof = dz => frontY - dz * depthYpx;
+
+    // 由後（舊）往前（新）畫，新列覆蓋舊列形成遮擋
+    for (let r = R - 1; r >= 0; r--) {
+      const dz   = R > 1 ? r / (R - 1) : 0;
+      const bins = _rows[r].bins;
+      const ox = originX(dz), w = rowW(dz), baseY = baseYof(dz);
+      let peak = 0;
+      for (let b = 0; b < N_BINS; b++) if (bins[b] > peak) peak = bins[b];
+      const rgb = cmap(peak);
+
+      ctx.beginPath();
+      ctx.moveTo(ox, baseY);
+      for (let b = 0; b < N_BINS; b += STEP) {
+        const x = ox + (b / (N_BINS - 1)) * w;
+        const y = baseY - bins[b] * ampH;
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(ox + w, baseY);
+      ctx.closePath();
+      // 填色：愈新（前）愈不透明；以峰值顏色微調，營造景深
+      const fade = 0.30 + 0.55 * (1 - dz);
+      ctx.fillStyle = rgbStr([rgb[0] * 0.5, rgb[1] * 0.5, rgb[2] * 0.5].map(Math.round), fade);
+      ctx.fill();
+      // 脊線（top line）
+      ctx.beginPath();
+      let started = false;
+      for (let b = 0; b < N_BINS; b += STEP) {
+        const x = ox + (b / (N_BINS - 1)) * w;
+        const y = baseY - bins[b] * ampH;
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = rgbStr(rgb, 0.35 + 0.6 * (1 - dz));
+      ctx.lineWidth = r === 0 ? 1.6 : 1;
+      ctx.stroke();
+    }
+
+    // 前緣頻道刻度
+    ctx.font = "9px -apple-system";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(255,255,255,.4)";
+    const dz0 = 0, ox0 = originX(dz0), w0 = rowW(dz0), by0 = baseYof(dz0);
+    const [fMin, fMax] = BAND_FREQ[_band];
+    for (const ch of TICKS[_band]) {
+      const f = chFreq(ch, _band);
+      const fx = (f - fMin) / (fMax - fMin);
+      if (fx < 0 || fx > 1) continue;
+      ctx.fillText(ch, ox0 + fx * w0, by0 + 16);
+    }
+
+    // 視角提示
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(255,255,255,.3)";
+    ctx.fillText("拖曳旋轉視角 · 新列在前", padL, padT - 2);
+  }
+
+  function bind3DInteraction() {
+    if (_wf3dBound) return;
+    const canvas = document.getElementById("spa-waterfall-canvas");
+    if (!canvas) return;
+    _wf3dBound = true;
+    let dragging = false, lx = 0, ly = 0;
+    canvas.addEventListener("pointerdown", e => {
+      if (_wfMode !== "3d") return;
+      dragging = true; lx = e.clientX; ly = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener("pointermove", e => {
+      if (!dragging || _wfMode !== "3d") return;
+      const dx = e.clientX - lx, dy = e.clientY - ly;
+      lx = e.clientX; ly = e.clientY;
+      _d3.skewX  = Math.max(-1, Math.min(1, _d3.skewX + dx * 0.004));
+      _d3.depthY = Math.max(0.25, Math.min(0.92, _d3.depthY + dy * 0.003));
+      draw3DWaterfall();
+    });
+    const stop = e => { dragging = false; try { canvas.releasePointerCapture(e.pointerId); } catch (_) {} };
+    canvas.addEventListener("pointerup", stop);
+    canvas.addEventListener("pointercancel", stop);
+  }
+
   function updateCards() {
     const nets = _lastNets.filter(n => n.band === _band);
     document.getElementById("spa-count").textContent  = nets.length;
@@ -309,15 +553,143 @@ const SpectrumTab = (() => {
     }
   }
 
+  // ── 錄製 / 儲存 / 載入 / 回放 ────────────────────────────────────────────────
+  function updateRecLabel() {
+    const btn = document.getElementById("spa-record");
+    btn.lastChild.textContent = _recording ? ` 錄製中 ${_recBuf.length}` : "錄製";
+  }
+
+  function toggleRecord() {
+    if (_mode === "playback") return;
+    _recording = !_recording;
+    if (_recording) _recBuf = [];
+    document.getElementById("spa-record").classList.toggle("active", _recording);
+    updateRecLabel();
+  }
+
+  function saveRecording() {
+    const buf = _recBuf;
+    if (!buf.length) { alert("尚無錄製資料，請先按「錄製」收集 sweep。"); return; }
+    const data = {
+      format: "wifi-survey-pro-spectrum",
+      version: 1,
+      created: new Date().toISOString(),
+      band: _band,
+      sweeps: buf,
+    };
+    const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+    a.href = url;
+    a.download = `wifi-spectrum-${ts}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function loadRecordingFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        const sweeps = data.sweeps || data;
+        if (!Array.isArray(sweeps) || !sweeps.length) throw new Error("空檔案");
+        _recBuf = sweeps;
+        if (data.band && BAND_FREQ[data.band]) {
+          _band = data.band;
+          syncBandButtons();
+        }
+        enterPlayback();
+      } catch (e) {
+        alert("無法載入錄製檔：" + e.message);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function enterPlayback() {
+    if (_recording) toggleRecord();
+    _mode = "playback";
+    _playing = false;
+    _playIdx = 0;
+    document.getElementById("spa-playback").hidden = false;
+    document.getElementById("spa-record").disabled = true;
+    const seek = document.getElementById("spa-seek");
+    seek.max = String(Math.max(0, _recBuf.length - 1));
+    seek.value = "0";
+    loadFrame(0);
+  }
+
+  function exitPlayback() {
+    stopPlay();
+    _mode = "live";
+    document.getElementById("spa-playback").hidden = true;
+    document.getElementById("spa-record").disabled = false;
+    resetSpectrumState();
+    _sweeps = 0;
+    render();
+  }
+
+  // 重建到第 idx 個 sweep：重放 [idx-MAX_ROWS+1 .. idx]，並從 0..idx 累積 maxHold/avg
+  function loadFrame(idx) {
+    idx = Math.max(0, Math.min(_recBuf.length - 1, idx));
+    _playIdx = idx;
+    resetSpectrumState();
+    const start = Math.max(0, idx - MAX_ROWS + 1);
+    // maxHold / avg 從頭累積（呈現「到目前為止」的保持與平均）
+    for (let i = 0; i <= idx; i++) {
+      const nets = _recBuf[i].nets || [];
+      const bins = computeBins(nets);
+      for (let b = 0; b < N_BINS; b++) {
+        if (bins[b] > _maxHold[b]) _maxHold[b] = bins[b];
+        _avgBins[b] = _avgInit ? _avgBins[b] * (1 - AVG_A) + bins[b] * AVG_A : bins[b];
+      }
+      _avgInit = true;
+      if (i >= start) { _rows.unshift({ bins }); }
+    }
+    _lastNets = _recBuf[idx].nets || [];
+    _sweeps = idx + 1;
+    document.getElementById("spa-seek").value = String(idx);
+    document.getElementById("spa-play-label").textContent =
+      `${idx + 1} / ${_recBuf.length}`;
+    render();
+  }
+
+  function playStep() {
+    if (_playIdx >= _recBuf.length - 1) { stopPlay(); return; }
+    loadFrame(_playIdx + 1);
+  }
+
+  function startPlay() {
+    if (_playIdx >= _recBuf.length - 1) loadFrame(0);
+    _playing = true;
+    document.getElementById("spa-play").textContent = "❚❚ 暫停";
+    const iv = (parseFloat(document.getElementById("spa-interval").value) || 2) * 1000;
+    _playTimer = setInterval(playStep, Math.max(200, iv));
+  }
+
+  function stopPlay() {
+    _playing = false;
+    if (_playTimer) { clearInterval(_playTimer); _playTimer = null; }
+    const btn = document.getElementById("spa-play");
+    if (btn) btn.textContent = "▶ 播放";
+  }
+
   // ── Controls ───────────────────────────────────────────────────────────────
+  function syncBandButtons() {
+    document.querySelectorAll("#spa-bands .iperf-mode-btn").forEach(b =>
+      b.classList.toggle("active", b.dataset.band === _band));
+  }
+
   document.querySelectorAll("#spa-bands .iperf-mode-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll("#spa-bands .iperf-mode-btn")
         .forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       _band = btn.dataset.band;
-      _rows = [];          // 不同頻段的頻率軸不同，瀑布圖重置
-      render();
+      resetSpectrumState();          // 不同頻段的頻率軸不同，重置累積狀態
+      if (_mode === "playback") loadFrame(_playIdx);
+      else render();
     });
   });
 
@@ -328,6 +700,65 @@ const SpectrumTab = (() => {
       ? `<svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>恢復`
       : `<svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暫停`;
     btn.classList.toggle("btn-success", _frozen);
+  });
+
+  // 疊加分析 toggles
+  function bindToggle(id, set) {
+    document.getElementById(id).addEventListener("click", e => {
+      const on = e.currentTarget.classList.toggle("active");
+      set(on);
+      render();
+    });
+  }
+  bindToggle("spa-maxhold", v => _showMaxHold = v);
+  bindToggle("spa-avg",     v => _showAvg = v);
+  bindToggle("spa-peak",    v => _showPeak = v);
+
+  document.getElementById("spa-reset-hold").addEventListener("click", () => {
+    _maxHold = new Float32Array(N_BINS);
+    _avgBins = new Float32Array(N_BINS);
+    _avgInit = false;
+    render();
+  });
+
+  // 瀑布 2D / 3D 切換
+  document.querySelectorAll("#spa-wf-mode .iperf-mode-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#spa-wf-mode .iperf-mode-btn")
+        .forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      _wfMode = btn.dataset.wf;
+      document.getElementById("spa-wf-title").textContent = _wfMode === "3d"
+        ? "瀑布圖 · 3D 立體（拖曳旋轉，新列在前）"
+        : "瀑布圖（新 → 舊，顏色 = 訊號強度）";
+      render();
+    });
+  });
+
+  // 錄製 / 儲存 / 載入
+  document.getElementById("spa-record").addEventListener("click", toggleRecord);
+  document.getElementById("spa-save").addEventListener("click", saveRecording);
+  document.getElementById("spa-load").addEventListener("click", () =>
+    document.getElementById("spa-file").click());
+  document.getElementById("spa-file").addEventListener("change", e => {
+    if (e.target.files[0]) loadRecordingFile(e.target.files[0]);
+    e.target.value = "";
+  });
+
+  // 回放控制
+  document.getElementById("spa-play").addEventListener("click", () =>
+    _playing ? stopPlay() : startPlay());
+  document.getElementById("spa-seek").addEventListener("input", e => {
+    stopPlay();
+    loadFrame(parseInt(e.target.value, 10) || 0);
+  });
+  document.getElementById("spa-exit-play").addEventListener("click", exitPlayback);
+
+  // 優化建議：依目前頻段的頻道壅塞 / 最佳頻道產生建議方案
+  document.getElementById("spa-reco-btn").addEventListener("click", () => {
+    const payload = { band: _band };
+    if (_lastNets.length) payload.networks = _lastNets;
+    Reco.fetchAndRender("spa-reco", "spectrum", payload, { scroll: true });
   });
 
   // 切到本分頁時立即重繪（canvas 在隱藏時量不到尺寸）

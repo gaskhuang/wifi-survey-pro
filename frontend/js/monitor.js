@@ -5,6 +5,7 @@
 
 let monChart = null;
 let _sse     = null;
+let _monSamples = [];   // 監控期間樣本，用於停止後產生穩定度優化建議
 
 document.getElementById("btn-mon-start").addEventListener("click", startMonitor);
 document.getElementById("btn-mon-stop").addEventListener("click",  stopMonitor);
@@ -15,6 +16,8 @@ async function startMonitor() {
 
   clearMonCards();
   initMonChart();
+  _monSamples = [];
+  document.getElementById("mon-reco").hidden = true;
 
   await fetch("/api/monitor/start", {
     method: "POST",
@@ -28,6 +31,7 @@ async function startMonitor() {
     try {
       const pt = JSON.parse(e.data);
       if (!pt.connected) return;
+      _monSamples.push({ rssi: pt.rssi, snr: pt.snr });
       updateMonChart(pt);
       updateMonCards(pt);
     } catch (_) {}
@@ -37,6 +41,11 @@ async function startMonitor() {
 async function stopMonitor() {
   if (_sse) { _sse.close(); _sse = null; }
   await fetch("/api/monitor/stop", { method: "POST" });
+
+  // 停止監控 → 依整段期間的 RSSI/SNR 穩定度產生優化建議方案
+  if (_monSamples.length) {
+    Reco.fetchAndRender("mon-reco", "monitor", { samples: _monSamples }, { scroll: true });
+  }
 }
 
 function initMonChart() {

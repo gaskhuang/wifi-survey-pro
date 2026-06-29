@@ -146,6 +146,10 @@ document.getElementById("btn-gen-heatmap").addEventListener("click", async () =>
 
     document.getElementById("heatmap-img").src = d.image;
     document.getElementById("heatmap-overlay").style.display = "block";
+
+    // 熱圖生成 → 自動產生覆蓋優化建議方案
+    const pts = await (await fetch("/api/heatmap/points")).json();
+    Reco.fetchAndRender("hm-reco", "heatmap", { measurements: pts.points || [] });
   } catch(e) {
     alert(`熱圖生成失敗：${e.message}`);
   } finally {

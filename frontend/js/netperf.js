@@ -38,6 +38,9 @@ async function runNetperf() {
 
     updateNpChart();
 
+    // 測試完成 → 自動產生優化建議方案
+    Reco.fetchAndRender("np-reco", "netperf", { perf: d });
+
     const errs = d.errors?.length ? ` | 錯誤: ${d.errors.join(", ")}` : "";
     showStatus(stat, `測試完成：Ping ${d.ping_ms ?? "—"} ms / DNS ${d.dns_ms ?? "—"} ms / HTTP ${d.http_ms ?? "—"} ms${errs}`);
   } catch(e) {

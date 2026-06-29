@@ -76,6 +76,9 @@ async function doScan() {
     if (d.needs_location) msg += " · Enable Location Services to see SSIDs";
     showStatus(status, msg, d.needs_location);
     updateReportCounts();
+
+    // 掃描完成 → 自動產生鄰居環境優化建議方案
+    Reco.fetchAndRender("scan-reco", "scan", { networks: APP.networks, current: conn });
   } catch(e) {
     showStatus(status, `Error: ${e.message}`, true);
   } finally {

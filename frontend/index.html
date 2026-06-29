@@ -252,6 +252,8 @@
         <div class="section-title">優化建議</div>
         <div id="recs-list"></div>
       </div>
+
+      <div class="reco-panel" id="scan-reco" hidden></div>
     </div>
 
     <!-- ═══ TAB: Spectrum Analyzer ══════════════════════════════════════════ -->
@@ -282,6 +284,42 @@
         <div class="card"><div class="card-label">已掃描次數</div><div class="card-val" id="spa-sweeps">—</div></div>
       </div>
 
+      <!-- ── 分析工具列（Max Hold / 平均 / 峰值 / 瀑布視圖 / 錄製回放）── -->
+      <div class="spa-toolbar">
+        <div class="spa-tool-group">
+          <span class="spa-tool-label">疊加</span>
+          <button class="btn btn-outline btn-sm active" id="spa-maxhold">Max Hold</button>
+          <button class="btn btn-outline btn-sm" id="spa-avg">平均</button>
+          <button class="btn btn-outline btn-sm active" id="spa-peak">峰值</button>
+          <button class="btn btn-outline btn-sm" id="spa-reset-hold">重置保持</button>
+        </div>
+        <div class="spa-tool-group">
+          <span class="spa-tool-label">瀑布</span>
+          <div class="iperf-mode-group" id="spa-wf-mode">
+            <button class="iperf-mode-btn active" data-wf="2d">2D</button>
+            <button class="iperf-mode-btn" data-wf="3d">3D</button>
+          </div>
+        </div>
+        <div class="spa-tool-group">
+          <span class="spa-tool-label">錄製</span>
+          <button class="btn btn-outline btn-sm" id="spa-record"><span class="spa-rec-dot"></span>錄製</button>
+          <button class="btn btn-outline btn-sm" id="spa-save">儲存</button>
+          <button class="btn btn-outline btn-sm" id="spa-load">載入</button>
+          <input type="file" id="spa-file" accept=".json,.wifispec" hidden>
+        </div>
+        <div class="spa-tool-group">
+          <button class="btn btn-primary btn-sm" id="spa-reco-btn">💡 優化建議</button>
+        </div>
+      </div>
+
+      <!-- ── 回放控制條（載入錄製檔後顯示）── -->
+      <div class="spa-playback" id="spa-playback" hidden>
+        <button class="btn btn-outline btn-sm" id="spa-play">▶ 播放</button>
+        <input type="range" id="spa-seek" min="0" max="0" value="0" step="1">
+        <span class="spa-tool-label" id="spa-play-label">0 / 0</span>
+        <button class="btn btn-outline btn-sm" id="spa-exit-play">結束回放</button>
+      </div>
+
       <div class="chart-section" style="padding-bottom:4px">
         <div class="section-title">即時頻譜（dBm）</div>
         <div class="spa-canvas-wrap" style="height:240px;position:relative">
@@ -290,11 +328,13 @@
       </div>
 
       <div class="chart-section" style="flex:1;min-height:0;display:flex;flex-direction:column">
-        <div class="section-title">瀑布圖（新 → 舊，顏色 = 訊號強度）</div>
+        <div class="section-title" id="spa-wf-title">瀑布圖（新 → 舊，顏色 = 訊號強度）</div>
         <div class="spa-canvas-wrap" style="flex:1;min-height:160px;position:relative">
           <canvas id="spa-waterfall-canvas"></canvas>
         </div>
       </div>
+
+      <div class="reco-panel" id="spa-reco" hidden></div>
     </div>
 
     <!-- ═══ TAB: Stability ═══════════════════════════════════════════════════ -->
@@ -413,6 +453,8 @@
         </div>
       </div>
 
+      <div class="reco-panel" id="hm-reco" hidden></div>
+
       <!-- Measurement modal -->
       <div id="pt-modal" class="modal hidden">
         <div class="modal-box">
@@ -465,6 +507,8 @@
           <canvas id="mon-chart"></canvas>
         </div>
       </div>
+
+      <div class="reco-panel" id="mon-reco" hidden></div>
     </div>
 
     <!-- ═══ TAB: Network Performance ════════════════════════════════════════ -->
@@ -613,6 +657,8 @@
           <canvas id="np-chart"></canvas>
         </div>
       </div>
+
+      <div class="reco-panel" id="np-reco" hidden></div>
 
       <!-- Reference table -->
       <div style="padding:0 20px 14px">
@@ -850,6 +896,7 @@
 </div>
 
 <script src="js/app.js"></script>
+<script src="js/reco.js"></script>
 <script src="js/spectrum.js"></script>
 <script src="js/scanner.js"></script>
 <script src="js/channels.js"></script>
