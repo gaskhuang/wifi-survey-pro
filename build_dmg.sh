@@ -51,7 +51,8 @@ mkdir -p "$MACOS" "$RESOURCES" "$APP_RES"
 info "Copying source files…"
 SOURCE_FILES=(
     main.py server.py scanner.py analyzer.py
-    heatmap_gen.py reporter.py recommender.py iperf3_mgr.py
+    heatmap_gen.py reporter.py recommender.py recommendations.py
+    iperf3_mgr.py stability.py speedtest_cf.py ai_advisor.py
 )
 for f in "${SOURCE_FILES[@]}"; do
     [[ -f "$SRC_DIR/$f" ]] && cp "$SRC_DIR/$f" "$APP_RES/" || warn "Missing: $f"
@@ -88,6 +89,8 @@ PYTHON="$RESOURCES/venv/bin/python3"
 APP="$RESOURCES/app/main.py"
 
 # Tell Python where to find app modules
+# PYTHONDONTWRITEBYTECODE：避免執行期在 bundle 內寫 .pyc，破壞程式碼簽章封印
+export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="$RESOURCES/app:$PYTHONPATH"
 
 # Launch
@@ -95,6 +98,12 @@ exec "$PYTHON" "$APP"
 BASH
 
 chmod +x "$LAUNCHER"
+
+# ── 5b. App icon（若專案根目錄有 AppIcon.icns 就帶上）──────────────────────────
+if [[ -f "$SRC_DIR/AppIcon.icns" ]]; then
+    info "Adding app icon…"
+    cp "$SRC_DIR/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+fi
 
 # ── 6. Info.plist ────────────────────────────────────────────────────────────
 info "Writing Info.plist…"
@@ -109,6 +118,7 @@ cat > "$CONTENTS/Info.plist" << PLIST
   <key>CFBundleName</key>              <string>${APP_NAME}</string>
   <key>CFBundleIdentifier</key>        <string>${BUNDLE_ID}</string>
   <key>CFBundleExecutable</key>        <string>${APP_NAME}</string>
+  <key>CFBundleIconFile</key>          <string>AppIcon</string>
   <key>CFBundlePackageType</key>       <string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key>           <string>${VERSION}</string>
