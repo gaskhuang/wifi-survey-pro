@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wi-Fi Survey Pro — macOS Wi-Fi 現場勘測工具
+NetInspect Pro — macOS Wi-Fi 現場勘測工具
 Entry point: launches Flask API + opens pywebview window (or browser fallback)
 """
 import os
@@ -49,13 +49,13 @@ def main():
         print(f"[ERROR] Server failed to start on port {port}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Wi-Fi Survey Pro running at {url}")
+    print(f"NetInspect Pro running at {url}")
 
     # Try pywebview first (native macOS window)
     try:
         import webview  # type: ignore
         window = webview.create_window(
-            title     = "Wi-Fi Survey Pro",
+            title     = "NetInspect Pro",
             url       = url,
             width     = 1280,
             height    = 820,

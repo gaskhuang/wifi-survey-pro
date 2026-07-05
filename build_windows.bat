@@ -1,11 +1,11 @@
 @echo off
 :: ═══════════════════════════════════════════════════════════════════════════
-:: Wi-Fi Survey Pro — Windows Build Script
+:: NetInspect Pro — Windows Build Script
 :: Run this on a Windows machine to create WiFiSurveyPro-Setup.exe
 :: Requirements: Python 3.10+  (python.org installer, add to PATH)
 :: ═══════════════════════════════════════════════════════════════════════════
 setlocal enabledelayedexpansion
-set APP_NAME=Wi-Fi Survey Pro
+set APP_NAME=NetInspect Pro
 set DIST_DIR=dist_win
 
 echo.

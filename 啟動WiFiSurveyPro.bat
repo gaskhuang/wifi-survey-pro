@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Wi-Fi Survey Pro
+title NetInspect Pro
 
 :: ── 自動要求系統管理員權限 ──────────────────────────────────────────────────
 net session >nul 2>&1
@@ -12,7 +12,7 @@ if errorlevel 1 (
 
 echo.
 echo  ╔══════════════════════════════════════╗
-echo  ║       Wi-Fi Survey Pro 啟動中...     ║
+echo  ║       NetInspect Pro 啟動中...     ║
 echo  ╚══════════════════════════════════════╝
 echo.
 
@@ -94,7 +94,7 @@ echo [OK] 套件安裝完成
 :: ── 啟動 ─────────────────────────────────────────────────────────────────
 echo.
 echo ════════════════════════════════════════
-echo  Wi-Fi Survey Pro 啟動中...
+echo  NetInspect Pro 啟動中...
 echo  瀏覽器將自動開啟 http://127.0.0.1:5173
 echo  關閉此視窗可停止程式
 echo ════════════════════════════════════════

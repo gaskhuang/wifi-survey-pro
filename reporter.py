@@ -1,5 +1,5 @@
 """
-Wi-Fi Survey Pro — PDF report generator v3.0
+NetInspect Pro — PDF report generator v3.0
 · CJK font via STHeiti / Hiragino (macOS built-in)
 · Sections: cover, summary, spectrum chart, network list,
             channel analysis, heatmap, recommendations, reference
@@ -515,7 +515,7 @@ def _build_diagnosis_pdf(data, site_info):
     story += [
         Spacer(1, 0.6*cm),
         HRFlowable(width="100%", thickness=0.8, color=GRAY),
-        Paragraph(f"由 Wi-Fi Survey Pro 產生 · {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        Paragraph(f"由 NetInspect Pro 產生 · {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                   + (f" · {ai.get('provider','')} 分析" if ai.get("provider") else ""),
                   st("Foot", 8, color=GRAY, align=TA_CENTER)),
     ]
@@ -841,7 +841,7 @@ def _build_stability_pdf(result, chart_b64, site_info):
     story += [
         Spacer(1, 0.6*cm),
         HRFlowable(width="100%", thickness=0.8, color=GRAY),
-        Paragraph(f"由 Wi-Fi Survey Pro 產生 · {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        Paragraph(f"由 NetInspect Pro 產生 · {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                   st("Foot", 8, color=GRAY, align=TA_CENTER)),
     ]
 

@@ -1,6 +1,6 @@
 # NetInspect Pro — 現場網路健檢平台 規格書 v0.1
 
-> 由 Wi-Fi Survey Pro 升級而來。定位從「Wi-Fi 勘測」擴大為
+> 由 NetInspect Pro 升級而來。定位從「Wi-Fi 勘測」擴大為
 > **IT 系統廠商到府網路健檢工具**：工程師帶一台筆電到客戶現場，
 > 一個 App 跑完 Wi-Fi + 有線 LAN + 流量 + AI 診斷，交付一份完整檢測報告。
 
@@ -34,7 +34,7 @@
   4. **開箱即用**：離線也能跑，不依賴外部服務。
 
 ### 產品名稱 ❓
-現名「Wi-Fi Survey Pro」已不符功能範圍。建議候選（請圈選或另提）：
+現名「NetInspect Pro」已不符功能範圍。建議候選（請圈選或另提）：
 - **NetInspect Pro**（網路現場健檢）← 建議
 - **SiteNet Inspector**
 - **NetProbe / 網檢通**

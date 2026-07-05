@@ -1,5 +1,5 @@
 """
-Flask API server for Wi-Fi Survey Pro v2.1
+Flask API server for NetInspect Pro v2.1
 New endpoints: /api/netperf, /api/scan/pause|resume, /api/bands,
                /api/heatmap/layers, /api/export/json
 """
@@ -904,7 +904,7 @@ def api_full_test():
 def api_info():
     import platform, sys
     return jsonify({
-        "app":      "Wi-Fi Survey Pro",
+        "app":      "NetInspect Pro",
         "version":  "2.1.0",
         "python":   sys.version.split()[0],
         "platform": platform.platform(),

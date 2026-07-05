@@ -1,4 +1,4 @@
-# Wi-Fi Survey Pro v2.1 — macOS dependencies
+# NetInspect Pro v2.1 — macOS dependencies
 # Python 3.10+ required
 
 # Core Wi-Fi scanning (macOS CoreWLAN)

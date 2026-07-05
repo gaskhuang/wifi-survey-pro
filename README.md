@@ -1,4 +1,4 @@
-# Wi-Fi Survey Pro
+# NetInspect Pro
 
 macOS / Windows Wi-Fi 現場勘測工具，提供即時頻譜視覺化、頻道分析、訊號熱力圖、效能測試與 PDF 報告輸出。
 
@@ -26,13 +26,13 @@ macOS / Windows Wi-Fi 現場勘測工具，提供即時頻譜視覺化、頻道�
 
 ### macOS（推薦）
 
-1. 前往 [Releases](https://github.com/gaskhuang/wifi-survey-pro/releases/latest) 下載 `Wi-Fi Survey Pro.dmg`
+1. 前往 [Releases](https://github.com/gaskhuang/wifi-survey-pro/releases/latest) 下載 `NetInspect Pro.dmg`
 2. 打開 DMG，將 App 拖到 **Applications**
 3. 首次開啟請右鍵 > **開啟**（繞過 Gatekeeper）
 
    或執行：
    ```bash
-   xattr -d com.apple.quarantine "/Applications/Wi-Fi Survey Pro.app"
+   xattr -d com.apple.quarantine "/Applications/NetInspect Pro.app"
    ```
 
 4. 開啟 App 後，前往**系統設定 → 隱私權與安全性 → 定位服務**，開啟 Terminal 的定位權限以顯示 SSID / BSSID
@@ -83,7 +83,7 @@ python3 main.py
 
 ```bash
 ./build_dmg.sh
-# 輸出：dist/Wi-Fi Survey Pro.dmg（約 60 MB）
+# 輸出：dist/NetInspect Pro.dmg（約 60 MB）
 ```
 
 ### Windows EXE
@@ -108,7 +108,7 @@ git tag v2.1.1 && git push origin v2.1.1
 ## 技術架構
 
 ```
-Wi-Fi Survey Pro
+NetInspect Pro
 ├── main.py              # 入口：啟動 Flask + pywebview
 ├── server.py            # Flask REST API
 ├── scanner.py           # macOS CoreWLAN 掃描 + 跨平台 dispatch

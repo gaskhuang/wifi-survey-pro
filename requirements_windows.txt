@@ -1,4 +1,4 @@
-# Wi-Fi Survey Pro — Windows dependencies (no PyObjC)
+# NetInspect Pro — Windows dependencies (no PyObjC)
 flask>=3.0
 Pillow>=10.0
 numpy>=1.26

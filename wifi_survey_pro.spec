@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for Wi-Fi Survey Pro
+# PyInstaller spec for NetInspect Pro
 import os, sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
@@ -75,7 +75,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Wi-Fi Survey Pro",
+    name="NetInspect Pro",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -95,24 +95,24 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="Wi-Fi Survey Pro",
+    name="NetInspect Pro",
 )
 
 app = BUNDLE(
     coll,
-    name="Wi-Fi Survey Pro.app",
+    name="NetInspect Pro.app",
     icon=None,                  # add .icns path here if you have one
     bundle_identifier="tw.zonetech.wifi-survey-pro",
     version="2.1.0",
     info_plist={
-        "CFBundleDisplayName":       "Wi-Fi Survey Pro",
+        "CFBundleDisplayName":       "NetInspect Pro",
         "CFBundleShortVersionString": "2.1",
         "NSHighResolutionCapable":   True,
         "NSRequiresAquaSystemAppearance": False,   # supports dark mode
         # Location permission for CoreWLAN BSSID/SSID access
         "NSLocationWhenInUseUsageDescription":
-            "Wi-Fi Survey Pro needs Location Services to display SSID and BSSID information.",
+            "NetInspect Pro needs Location Services to display SSID and BSSID information.",
         "NSLocationAlwaysUsageDescription":
-            "Wi-Fi Survey Pro needs Location Services to display SSID and BSSID information.",
+            "NetInspect Pro needs Location Services to display SSID and BSSID information.",
     },
 )

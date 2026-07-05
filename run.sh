@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-# Wi-Fi Survey Pro — 啟動腳本
+# NetInspect Pro — 啟動腳本
 # ═══════════════════════════════════════════════════════════════════════════
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$APP_DIR/.venv"
@@ -11,6 +11,6 @@ if [ ! -d "$VENV" ]; then
 fi
 
 source "$VENV/bin/activate"
-echo "Wi-Fi Survey Pro 啟動中..."
+echo "NetInspect Pro 啟動中..."
 cd "$APP_DIR"
 python3 main.py "$@"

@@ -1,5 +1,5 @@
 """
-Wi-Fi Survey Pro — Windows 掃描後端 v2
+NetInspect Pro — Windows 掃描後端 v2
 使用 netsh wlan，支援中文 / 英文 Windows（欄位名稱語系無關解析）
 """
 import re

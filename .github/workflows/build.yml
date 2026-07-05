@@ -104,7 +104,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: WiFiSurveyPro-macOS
-          path: "dist/Wi-Fi Survey Pro.dmg"
+          path: "dist/NetInspect Pro.dmg"
 
   # ─────────────────────────────────────────────────────────────────────────
   # Release — attach both artifacts when a tag is pushed
@@ -133,16 +133,16 @@ jobs:
         with:
           files: artifacts/*
           body: |
-            ## Wi-Fi Survey Pro ${{ github.ref_name }}
+            ## NetInspect Pro ${{ github.ref_name }}
 
             ### 下載
             | 平台 | 檔案 |
             |------|------|
-            | macOS | `Wi-Fi Survey Pro.dmg` — 拖到 Applications 安裝 |
+            | macOS | `NetInspect Pro.dmg` — 拖到 Applications 安裝 |
             | Windows | `WiFiSurveyPro-Windows.zip` — 解壓後執行 `WiFi Survey Pro.exe` |
 
             ### macOS 首次開啟
             右鍵 > 開啟，或執行：
             ```
-            xattr -d com.apple.quarantine "/Applications/Wi-Fi Survey Pro.app"
+            xattr -d com.apple.quarantine "/Applications/NetInspect Pro.app"
             ```

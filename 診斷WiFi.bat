@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title Wi-Fi Survey Pro 診斷工具
+title NetInspect Pro 診斷工具
 
 echo ════════════════════════════════════════════
-echo  Wi-Fi Survey Pro — Windows 診斷
+echo  NetInspect Pro — Windows 診斷
 echo ════════════════════════════════════════════
 echo.
 

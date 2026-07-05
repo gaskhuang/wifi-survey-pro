@@ -1,18 +1,18 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-# Wi-Fi Survey Pro — Build macOS .app + DMG
+# NetInspect Pro — Build macOS .app + DMG
 #
 # Strategy: embed the venv inside the .app bundle (no PyInstaller/py2app).
 # Works on the machine it's built on; same Python version guaranteed.
 #
 # Usage:   ./build_dmg.sh
-# Output:  dist/Wi-Fi Survey Pro.dmg
+# Output:  dist/NetInspect Pro.dmg
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-APP_NAME="Wi-Fi Survey Pro"
-BUNDLE_ID="tw.zonetech.wifi-survey-pro"
-VERSION="2.1.0"
+APP_NAME="NetInspect Pro"
+BUNDLE_ID="tw.zonetech.netinspect-pro"
+VERSION="3.0.0"
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST_DIR="$SRC_DIR/dist"
@@ -134,9 +134,9 @@ cat > "$CONTENTS/Info.plist" << PLIST
   <key>NSHighResolutionCapable</key>   <true/>
   <key>NSRequiresAquaSystemAppearance</key><false/>
   <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Wi-Fi Survey Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。</string>
+    <string>NetInspect Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。</string>
   <key>NSLocationAlwaysUsageDescription</key>
-    <string>Wi-Fi Survey Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。</string>
+    <string>NetInspect Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。</string>
 </dict>
 </plist>
 PLIST

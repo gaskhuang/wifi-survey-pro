@@ -1,11 +1,11 @@
 """
-py2app setup for Wi-Fi Survey Pro
+py2app setup for NetInspect Pro
 Build: python setup.py py2app
 """
 from setuptools import setup
 
 APP        = ["main.py"]
-APP_NAME   = "Wi-Fi Survey Pro"
+APP_NAME   = "NetInspect Pro"
 IDENTIFIER = "tw.zonetech.wifi-survey-pro"
 VERSION    = "2.1.0"
 
@@ -22,9 +22,9 @@ OPTIONS = {
         "LSMinimumSystemVersion":        "12.0",
         # Location Services permission for CoreWLAN BSSID/SSID
         "NSLocationWhenInUseUsageDescription":
-            "Wi-Fi Survey Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。",
+            "NetInspect Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。",
         "NSLocationAlwaysUsageDescription":
-            "Wi-Fi Survey Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。",
+            "NetInspect Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。",
     },
     "packages": [
         "flask", "werkzeug", "jinja2", "click", "itsdangerous",
