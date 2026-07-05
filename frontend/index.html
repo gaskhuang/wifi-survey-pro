@@ -53,6 +53,9 @@
       <a href="#" class="nav-item" data-tab="lan">
         <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>有線 LAN
       </a>
+      <a href="#" class="nav-item" data-tab="traffic">
+        <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-4 4 3 5-7"/></svg>流量監測
+      </a>
       <a href="#" class="nav-item" data-tab="report">
         <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>報告
       </a>
@@ -886,6 +889,49 @@
       <div class="reco-panel" id="lan-reco" hidden></div>
     </div>
 
+    <!-- ═══ TAB: 流量異常監測 ═════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-traffic">
+      <div class="tab-header">
+        <h1>流量異常監測</h1>
+        <div class="actions">
+          <select id="tf-iface" class="select-input" style="width:110px" title="監聽介面"></select>
+          <select id="tf-duration" class="select-input" title="擷取時間">
+            <option value="10">10 秒</option>
+            <option value="15" selected>15 秒</option>
+            <option value="30">30 秒</option>
+            <option value="60">60 秒</option>
+          </select>
+          <button class="btn btn-primary" id="btn-tf-start">
+            <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>開始擷取
+          </button>
+          <button class="btn btn-outline" id="btn-tf-stop" disabled>停止</button>
+        </div>
+      </div>
+
+      <div id="tf-perm" class="status-line hidden" style="border-left:3px solid var(--warning)"></div>
+      <div id="tf-status" class="status-line hidden"></div>
+      <div id="tf-progress-wrap" class="lan-progress-wrap hidden"><div id="tf-progress-bar" class="lan-progress-bar"></div></div>
+
+      <div class="cards-row">
+        <div class="card"><div class="card-label">總封包</div><div class="card-val" id="tf-pkts">—</div></div>
+        <div class="card"><div class="card-label">每秒封包 (pps)</div><div class="card-val" id="tf-pps">—</div></div>
+        <div class="card"><div class="card-label">廣播占比</div><div class="card-val" id="tf-bcast">—</div></div>
+        <div class="card"><div class="card-label">來源數</div><div class="card-val" id="tf-sources">—</div></div>
+      </div>
+
+      <div class="chart-section" style="padding-bottom:4px">
+        <div class="section-title">流量排行 Top Talkers <span class="muted" style="font-size:11px">（依封包數；佔比高者可能異常發送）</span></div>
+        <div class="table-wrap" style="max-height:300px;overflow:auto">
+          <table class="net-table lan-table">
+            <thead><tr><th>#</th><th>來源 MAC</th><th>廠牌</th><th>範例 IP</th><th>封包</th><th>pps</th><th>佔比</th><th>廣播/ARP</th></tr></thead>
+            <tbody id="tf-tbody"><tr class="empty-row"><td colspan="8">尚未擷取 — 點「開始擷取」監測流量</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="reco-panel" id="tf-reco" hidden></div>
+    </div>
+
     <!-- ═══ TAB: Report ══════════════════════════════════════════════════════ -->
     <div class="tab-pane" id="tab-report">
       <div class="tab-header">
@@ -1004,6 +1050,7 @@
 <script src="js/reco.js"></script>
 <script src="js/settings.js"></script>
 <script src="js/lan.js"></script>
+<script src="js/traffic.js"></script>
 <script src="js/spectrum.js"></script>
 <script src="js/scanner.js"></script>
 <script src="js/channels.js"></script>

@@ -54,7 +54,7 @@ SOURCE_FILES=(
     heatmap_gen.py reporter.py recommender.py recommendations.py
     iperf3_mgr.py stability.py speedtest_cf.py ai_advisor.py
     lan_scanner.py platform_caps.py
-    config.py ai_providers.py
+    config.py ai_providers.py traffic_monitor.py
 )
 for f in "${SOURCE_FILES[@]}"; do
     [[ -f "$SRC_DIR/$f" ]] && cp "$SRC_DIR/$f" "$APP_RES/" || warn "Missing: $f"

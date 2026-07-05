@@ -21,6 +21,7 @@ import lan_scanner
 import platform_caps
 import config as appconfig
 import ai_providers
+import traffic_monitor
 import iperf3_mgr
 import stability
 import speedtest_cf
@@ -642,6 +643,62 @@ def api_lan_portscan():
     if not lan_scanner.is_valid_ipv4(ip):
         return jsonify({"ok": False, "error": "IP 格式不正確"}), 400
     return jsonify({"ok": True, "result": lan_scanner.portscan(ip)})
+
+
+# ─── 流量異常監測（P2）─────────────────────────────────────────────────────────
+@app.route("/api/traffic/interfaces")
+def api_traffic_interfaces():
+    return jsonify({"interfaces": traffic_monitor.list_interfaces(),
+                    "can_capture": traffic_monitor.can_capture()})
+
+
+@app.route("/api/traffic/stream")
+def api_traffic_stream():
+    """SSE：擷取流量。事件 start / stats（即時）/ done（含 assessment+snapshot）/ error。"""
+    iface = (request.args.get("iface") or traffic_monitor.default_iface()).strip()
+    try:
+        duration = max(3, min(120, int(request.args.get("duration", 15))))
+    except (ValueError, TypeError):
+        duration = 15
+
+    q: "queue.Queue" = queue.Queue()
+    cap = traffic_monitor.Capture(iface, duration)
+
+    def run():
+        try:
+            result = cap.run(on_stats=lambda s: q.put(("stats", s)))
+            q.put(("done", result))
+        except PermissionError as e:
+            q.put(("error", {"error": str(e), "need_perm": True}))
+        except Exception as e:
+            q.put(("error", {"error": str(e)}))
+        q.put((None, None))
+
+    if not traffic_monitor.can_capture():
+        def gen_err():
+            yield _sse("error", {
+                "need_perm": True,
+                "error": "無法擷取封包：需要 BPF 權限。請安裝 Wireshark 的 ChmodBPF，"
+                         "或以系統管理員權限啟動本程式。"})
+        return Response(stream_with_context(gen_err()), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def gen():
+        try:
+            yield _sse("start", {"iface": iface, "duration": duration})
+            while True:
+                etype, data = q.get()
+                if etype is None:
+                    break
+                yield _sse(etype, data)
+        finally:
+            cap.stop()      # 客戶端斷線 → 停止擷取
+
+    return Response(
+        stream_with_context(gen()), mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/api/lan/export")
