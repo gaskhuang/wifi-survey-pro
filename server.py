@@ -478,6 +478,20 @@ def api_diagnose_stream():
     )
 
 
+@app.route("/api/diagnose/report", methods=["POST"])
+def api_diagnose_report():
+    """把現場診斷結果輸出成 PDF 報告。
+    body: diagnose 分頁蒐集的結果（current/netperf/speedtest/stability/analysis/scan/ai）
+          + 選填 site_info。"""
+    data      = request.get_json(silent=True) or {}
+    site_info = data.pop("site_info", {}) if isinstance(data, dict) else {}
+    pdf_bytes = reporter.generate_diagnosis_pdf(data, site_info)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    return Response(
+        pdf_bytes, mimetype="application/pdf",
+        headers={"Content-Disposition": f"attachment;filename=wifi_diagnosis_{ts}.pdf"})
+
+
 # ─── Connection stability test ──────────────────────────────────────────────
 @app.route("/api/stability/start", methods=["POST"])
 def api_stability_start():

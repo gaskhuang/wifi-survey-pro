@@ -21,6 +21,36 @@
   let _stepEls = {};
 
   document.getElementById("btn-dg-start").addEventListener("click", startDiagnose);
+  document.getElementById("btn-dg-pdf").addEventListener("click", exportPDF);
+
+  // ── 匯出 PDF 診斷報告 ────────────────────────────────────────────────────────
+  async function exportPDF() {
+    if (!Object.keys(_data).length) { alert("請先執行診斷再匯出報告。"); return; }
+    const btn = document.getElementById("btn-dg-pdf");
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<div class="spinner" style="width:13px;height:13px;border-color:rgba(255,255,255,.3);border-top-color:#fff"></div> 產生報告中…`;
+    try {
+      const r = await fetch("/api/diagnose/report", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(_data),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url  = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+      a.href = url; a.download = `wifi-diagnosis-${ts}.pdf`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      alert("報告產生失敗：" + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
+  }
 
   function startDiagnose() {
     const duration = document.getElementById("dg-duration").value || "30";

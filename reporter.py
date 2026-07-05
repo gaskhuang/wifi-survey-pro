@@ -348,6 +348,193 @@ def _build_pdf(site_info, networks, analysis, measurements,
     return buf.read()
 
 
+# ── Field diagnosis report ──────────────────────────────────────────────────────
+def _health_grade(score: int):
+    if score >= 90: return ("優異",     "#22c55e", "🟢")
+    if score >= 75: return ("良好",     "#84cc16", "🟡")
+    if score >= 55: return ("普通",     "#eab308", "🟠")
+    if score >= 35: return ("較差",     "#f97316", "🔴")
+    return             ("嚴重問題", "#ef4444", "🚨")
+
+
+def generate_diagnosis_pdf(data: dict, site_info: dict | None = None) -> bytes:
+    """現場診斷 PDF：健康總評、量測摘要、頻道分析、AI 建議行動。
+    data = diagnose 分頁蒐集的結果（current / netperf / speedtest / stability
+           / analysis / scan / ai）。"""
+    try:
+        from reportlab.lib.pagesizes import A4  # noqa: F401 — probe availability
+        return _build_diagnosis_pdf(data, site_info or {})
+    except ImportError:
+        return _fallback_diagnosis_html(data).encode()
+
+
+def _build_diagnosis_pdf(data, site_info):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, HRFlowable,
+    )
+
+    FONT = _register_fonts()
+    buf  = io.BytesIO()
+    doc  = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=2*cm, rightMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm,
+        title="Wi-Fi Field Diagnosis Report")
+
+    BLUE  = colors.HexColor("#1e40af")
+    BLUE2 = colors.HexColor("#1d4ed8")
+    GRAY  = colors.HexColor("#64748b")
+
+    def st(name, size, color=colors.black, align=TA_LEFT, space_after=4, bold=False):
+        return ParagraphStyle(name, fontName=("CJK-Bold" if bold and FONT == "CJK" else FONT),
+                              fontSize=size, textColor=color, alignment=align,
+                              spaceAfter=space_after, leading=size*1.4)
+
+    H1   = st("H1", 18, color=BLUE,  align=TA_CENTER, space_after=8)
+    H1s  = st("H1s", 11, color=GRAY, align=TA_CENTER, space_after=12)
+    H2   = st("H2", 13, color=BLUE2, space_after=6)
+    BODY = st("Body", 9, space_after=3)
+    SMAL = st("Smal", 8, color=GRAY, space_after=2)
+
+    cur  = data.get("current")   or {}
+    np_  = data.get("netperf")   or {}
+    spd  = data.get("speedtest") or {}
+    stab = data.get("stability") or {}
+    ana  = data.get("analysis")  or {}
+    nets = data.get("scan")      or []
+    ai   = data.get("ai")        or {}
+
+    score = ai.get("score")
+    if score is None:
+        score = stab.get("score", 0)
+    glabel, gcolor, gemoji = _health_grade(int(score or 0))
+    gcol = colors.HexColor(gcolor)
+    BIG  = st("Big", 30, color=gcol, align=TA_CENTER, space_after=2, bold=True)
+    GLAB = st("Glab", 13, color=gcol, align=TA_CENTER, space_after=12)
+
+    story = [
+        Paragraph("Wi-Fi 現場診斷報告", H1),
+        Paragraph("Wi-Fi Field Diagnosis Report", H1s),
+        HRFlowable(width="100%", thickness=2, color=BLUE),
+        Spacer(1, 0.5*cm),
+    ]
+
+    # ── 一、受測連線 ──
+    band_ch = (f"{cur.get('band') or ''} ch{cur.get('channel')}".strip()
+               if cur.get("channel") else "—")
+    info_rows = [
+        ["狀態",     "已連線" if cur.get("connected") else "未連線"],
+        ["SSID",     str(cur.get("ssid") or "—")],
+        ["BSSID",    str(cur.get("bssid") or "—")],
+        ["頻道",     band_ch],
+        ["標準",     str(cur.get("standard") or "—")],
+        ["診斷時間", datetime.now().strftime("%Y-%m-%d %H:%M")],
+    ]
+    if site_info.get("site"):
+        info_rows.insert(0, ["場地", site_info["site"]])
+    if site_info.get("tester"):
+        info_rows.append(["檢測人員", site_info["tester"]])
+    story += [Paragraph("一、受測連線", H2),
+              _kv_table(info_rows, FONT), Spacer(1, 0.5*cm)]
+
+    # ── 二、健康總評 ──
+    story += [
+        Paragraph("二、健康總評", H2),
+        Paragraph(f"{int(score or 0)} / 100", BIG),
+        Paragraph(f"{gemoji} {glabel}", GLAB),
+    ]
+    if ai.get("summary"):
+        story += [Paragraph(str(ai["summary"]), BODY), Spacer(1, 0.3*cm)]
+
+    # ── 三、量測摘要 ──
+    def fmt(v, unit=""):
+        return f"{v}{unit}" if v is not None else "—"
+    rssi = cur.get("rssi") if cur.get("connected") else None
+    m_rows = [["項目", "數值", "項目", "數值"]]
+    m_rows.append(["訊號 RSSI", fmt(rssi, " dBm"), "SNR", fmt(cur.get("snr"), " dB")])
+    m_rows.append(["下載", fmt(spd.get("down_mbps"), " Mbps"), "上傳", fmt(spd.get("up_mbps"), " Mbps")])
+    m_rows.append(["Ping 延遲", fmt(np_.get("ping_ms"), " ms"), "Jitter", fmt(np_.get("ping_jitter_ms"), " ms")])
+    m_rows.append(["封包遺失", fmt(np_.get("ping_loss_pct"), " %"), "DNS", fmt(np_.get("dns_ms"), " ms")])
+    m_rows.append(["穩定度分數",
+                   (f"{stab.get('score')} /100" if stab.get("score") is not None else "—"),
+                   "鄰居 AP 數", str(len(nets))])
+    story += [Paragraph("三、量測摘要", H2),
+              _data_table(m_rows, FONT, BLUE, header=True), Spacer(1, 0.5*cm)]
+
+    # ── 四、頻道分析 ──
+    story.append(Paragraph("四、頻道分析與建議頻道", H2))
+    ch_rows = [["頻段", "建議頻道（最空）", "已佔用頻道"]]
+    any_band = False
+    for band in ("2.4GHz", "5GHz", "6GHz"):
+        bd = ana.get(band) or {}
+        best = bd.get("best_channels") or []
+        if not best and not bd.get("occupied"):
+            continue
+        any_band = True
+        best_txt = "、".join(str(b.get("channel")) for b in best[:3]) or "—"
+        occ = bd.get("occupied") or []
+        occ_txt = "、".join(str(c) for c in occ[:12]) + ("…" if len(occ) > 12 else "") if occ else "—"
+        ch_rows.append([band, best_txt, occ_txt])
+    if any_band:
+        story.append(_data_table(ch_rows, FONT, BLUE, header=True))
+        coi = (ana.get("summary") or {}).get("co_channel_hotspots")
+        if coi:
+            story.append(Paragraph(f"　偵測到 {coi} 個同頻干擾熱區，建議重新規劃 AP 頻道分配。", SMAL))
+    else:
+        story.append(Paragraph("（無頻道分析資料）", SMAL))
+    story.append(Spacer(1, 0.5*cm))
+
+    # ── 五、AI 建議行動 ──
+    story.append(Paragraph("五、建議行動方案", H2))
+    PRIO = [
+        ("immediate", "【立即處理】", "#dc2626"),
+        ("adjust",    "【建議調整】", "#ca8a04"),
+        ("ok",        "【狀態正常】", "#16a34a"),
+    ]
+    items = ai.get("items") or []
+    if items:
+        for key, label, color in PRIO:
+            group = [i for i in items if i.get("priority") == key]
+            if not group:
+                continue
+            story.append(Paragraph(f'<font color="{color}"><b>{label}（{len(group)}）</b></font>', BODY))
+            for i in group:
+                cat = f'（{i.get("category")}）' if i.get("category") else ""
+                story.append(Paragraph(f'<font color="{color}">• {i.get("problem","")}{cat}</font>', BODY))
+                if i.get("action"):
+                    story.append(Paragraph(f'　→ {i["action"]}', SMAL))
+                story.append(Spacer(1, 0.12*cm))
+            story.append(Spacer(1, 0.15*cm))
+    else:
+        story.append(Paragraph("（本次未產生 AI 建議項目）", SMAL))
+
+    story += [
+        Spacer(1, 0.6*cm),
+        HRFlowable(width="100%", thickness=0.8, color=GRAY),
+        Paragraph(f"由 Wi-Fi Survey Pro 產生 · {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                  + (f" · {ai.get('provider','')} 分析" if ai.get("provider") else ""),
+                  st("Foot", 8, color=GRAY, align=TA_CENTER)),
+    ]
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.read()
+
+
+def _fallback_diagnosis_html(data) -> str:
+    ai = data.get("ai") or {}
+    rows = "\n".join(
+        f"<li>[{i.get('priority')}] {i.get('problem')} → {i.get('action')}</li>"
+        for i in (ai.get("items") or []))
+    return f"""<html><meta charset="utf-8"><body>
+<h1>Wi-Fi 現場診斷報告</h1>
+<p>健康分數: {ai.get('score','—')}/100</p><ul>{rows}</ul></body></html>"""
+
+
 # ── Stability report ───────────────────────────────────────────────────────────
 def generate_stability_pdf(result: dict, chart_b64: str = "",
                            site_info: dict | None = None) -> bytes:
