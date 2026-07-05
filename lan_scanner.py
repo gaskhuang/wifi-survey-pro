@@ -404,9 +404,11 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
     self_ip = _primary_ip()
     _ensure_oui()               # 並發查詢前先預熱 OUI 資料庫
 
-    # 1) 並發 ping sweep（同時觸發 ARP 解析）
+    # 1) 並發 ping sweep（同時觸發 ARP 解析）— 每探到一台就即時回報（邊掃邊顯示）
     alive = set()
     done = 0
+    if progress:
+        progress(0, total, {"_phase": "ping"})
     with ThreadPoolExecutor(max_workers=64) as ex:
         futs = {ex.submit(_ping_once, str(ip)): str(ip) for ip in hosts_iter}
         for f in as_completed(futs):
@@ -417,6 +419,12 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
             try:
                 if f.result():
                     alive.add(ip)
+                    if progress:                    # 立即冒出一列（先給 IP，細節稍後補）
+                        progress(done, total, {
+                            "ip": ip, "ping_ok": True, "mac": "", "vendor": "掃描中…",
+                            "type": "掃描中…", "hostname": "", "open_ports": [],
+                            "services": [], "is_gateway": ip == gateway,
+                            "confidence": {}, "sources": ["ping"], "partial": True})
             except Exception:
                 pass
             if progress:
@@ -433,6 +441,8 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
     # 3a) 深度掃描：集中所有 (ip, port) 到單一扁平執行緒池，避免巢狀池造成執行緒爆量
     ports_by_ip = {ip: set() for ip in plist}
     if deep and plist:
+        if progress:
+            progress(total, total, {"_phase": "portscan", "count": len(plist)})
         tasks = [(ip, port) for ip in plist for port in SCAN_PORTS]
         with ThreadPoolExecutor(max_workers=100) as ex:
             futs = {ex.submit(_probe_port, ip, port, 0.4): (ip, port)
@@ -472,6 +482,8 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
             "sources": sources,
         }
 
+    if progress and plist:
+        progress(total, total, {"_phase": "fingerprint", "count": len(plist)})
     with ThreadPoolExecutor(max_workers=32) as ex:
         futs = {ex.submit(_fingerprint, ip): ip for ip in plist}
         fdone = 0
@@ -485,7 +497,7 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
             hosts.append(h)
             fdone += 1
             if progress:
-                progress(total, total, h)   # host 逐台回報
+                progress(total, total, h)   # host 逐台回報（補上完整指紋）
 
     hosts.sort(key=lambda h: tuple(int(o) for o in h["ip"].split(".")))
 

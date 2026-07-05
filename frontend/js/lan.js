@@ -9,8 +9,15 @@ const LAN = (() => {
 
   let _es       = null;
   let _hosts    = [];      // 逐台累積
+  let _rowByIp  = {};      // ip → <tr>，供邊掃邊即時更新
   let _result   = null;    // 完成後的完整結果
   let _ifaceLoaded = false;
+
+  const PHASE_TXT = {
+    ping:        "掃描主機中…（探測網段內每個 IP）",
+    portscan:    "埠掃描中…（辨識服務）",
+    fingerprint: "辨識設備品牌 / 類型中…",
+  };
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
@@ -43,7 +50,7 @@ const LAN = (() => {
     const deep = $("lan-deep").checked;
 
     if (_es) { _es.close(); _es = null; }
-    _hosts = []; _result = null;
+    _hosts = []; _rowByIp = {}; _result = null;
     $("lan-tbody").innerHTML = "";
     $("lan-reco").hidden = true;
     $("lan-progress-wrap").classList.remove("hidden");
@@ -66,7 +73,15 @@ const LAN = (() => {
         $("lan-progress-bar").style.width = pct + "%";
         $("lan-scanned").textContent = `${d.done}/${d.total}`;
       }
-      if (d.host) { _hosts.push(d.host); appendRow(d.host); $("lan-count").textContent = _hosts.length; }
+      if (d.host) {
+        if (d.host._phase) {                       // 階段切換 → 更新提示文字
+          const t = PHASE_TXT[d.host._phase] || "";
+          $("lan-live-hint").textContent = d.host.count ? `${t}（${d.host.count} 台）` : t;
+          return;
+        }
+        upsertRow(d.host);                         // 邊掃邊即時新增 / 更新該台
+        $("lan-count").textContent = Object.keys(_rowByIp).length;
+      }
     });
 
     _es.addEventListener("done", e => {
@@ -127,11 +142,19 @@ const LAN = (() => {
       </div></td>`;
   }
 
-  function appendRow(h) {
-    const tb = $("lan-tbody");
-    const tr = document.createElement("tr");
-    tr.innerHTML = rowHTML(h);
-    tb.appendChild(tr);
+  function upsertRow(h) {
+    let tr = _rowByIp[h.ip];
+    if (tr) {                          // 已有該台 → 就地補上/更新細節
+      tr.innerHTML = rowHTML(h);
+      const i = _hosts.findIndex(x => x.ip === h.ip);
+      if (i >= 0) _hosts[i] = h; else _hosts.push(h);
+    } else {                           // 新探到 → 立即冒出一列
+      tr = document.createElement("tr");
+      tr.innerHTML = rowHTML(h);
+      $("lan-tbody").appendChild(tr);
+      _rowByIp[h.ip] = tr;
+      _hosts.push(h);
+    }
   }
 
   function renderTable() {
