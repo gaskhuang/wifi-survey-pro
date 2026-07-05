@@ -53,6 +53,7 @@ SOURCE_FILES=(
     main.py server.py scanner.py analyzer.py
     heatmap_gen.py reporter.py recommender.py recommendations.py
     iperf3_mgr.py stability.py speedtest_cf.py ai_advisor.py
+    lan_scanner.py platform_caps.py
 )
 for f in "${SOURCE_FILES[@]}"; do
     [[ -f "$SRC_DIR/$f" ]] && cp "$SRC_DIR/$f" "$APP_RES/" || warn "Missing: $f"
@@ -61,6 +62,12 @@ done
 # Copy frontend
 info "Copying frontend…"
 cp -r "$SRC_DIR/frontend" "$APP_RES/frontend"
+
+# Copy data (bundled OUI database for offline vendor lookup)
+if [[ -d "$SRC_DIR/data" ]]; then
+    info "Copying data (OUI database)…"
+    cp -r "$SRC_DIR/data" "$APP_RES/data"
+fi
 
 # ── 4. Create a relocatable Python venv inside the bundle ────────────────────
 info "Creating bundled Python venv (this may take a minute)…"

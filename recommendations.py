@@ -215,9 +215,113 @@ def assess_monitor(samples: list, current: dict) -> dict:
     return _pack(issues, "監控期間訊號與 SNR 皆穩定。")
 
 
+# ═══ 有線 LAN 盤查（內網資產與風險）═══════════════════════════════════════════
+def assess_lan(scan: dict) -> dict:
+    hosts = (scan or {}).get("hosts") or []
+    issues = []
+    n = len(hosts)
+
+    def has(h, port):
+        return port in (h.get("open_ports") or [])
+
+    def ips(lst, k=5):
+        s = "、".join(h["ip"] for h in lst[:k])
+        return s + ("…" if len(lst) > k else "")
+
+    telnet = [h for h in hosts if has(h, 23)]
+    ftp    = [h for h in hosts if has(h, 21)]
+    rdp    = [h for h in hosts if has(h, 3389)]
+    web_nas = [h for h in hosts if h.get("type") == "NAS" and
+               ({80, 8080, 8081, 5000} & set(h.get("open_ports") or []))]
+    printers = [h for h in hosts if str(h.get("type", "")).startswith("印表機")]
+    nas      = [h for h in hosts if h.get("type") == "NAS"]
+    unknown_type = [h for h in hosts if h.get("type") == "不明"]
+    no_vendor    = [h for h in hosts if h.get("vendor") in ("", "未知")]
+    gateway      = [h for h in hosts if h.get("is_gateway")]
+
+    # ── 安全風險 ──
+    if telnet:
+        issues.append({
+            "severity": "critical", "category": "明文管理協定", "icon": "🔓",
+            "title": f"{len(telnet)} 台開放 Telnet(23)",
+            "problem": f"Telnet 為明文傳輸，帳密可被竊聽：{ips(telnet)}",
+            "recommendation": "關閉 Telnet，改用 SSH(22)；設備若僅支援 Telnet 應更換或隔離至管理 VLAN。",
+            "value": len(telnet),
+        })
+    if ftp:
+        issues.append({
+            "severity": "warning", "category": "明文傳輸", "icon": "📁",
+            "title": f"{len(ftp)} 台開放 FTP(21)",
+            "problem": f"FTP 明文傳輸帳密與檔案：{ips(ftp)}",
+            "recommendation": "改用 SFTP/FTPS；非必要請關閉。",
+            "value": len(ftp),
+        })
+    if rdp:
+        issues.append({
+            "severity": "warning", "category": "遠端桌面", "icon": "🖥️",
+            "title": f"{len(rdp)} 台開放 RDP(3389)",
+            "problem": f"RDP 常為勒索軟體入侵點：{ips(rdp)}",
+            "recommendation": "限制來源 IP、啟用 NLA 與強密碼/MFA；對外務必經 VPN。",
+            "value": len(rdp),
+        })
+    if web_nas:
+        issues.append({
+            "severity": "info", "category": "NAS 管理介面", "icon": "🗄️",
+            "title": f"{len(web_nas)} 台 NAS 開放網頁管理埠",
+            "problem": f"NAS 管理介面可由內網存取：{ips(web_nas)}",
+            "recommendation": "確認未對外曝露、啟用 HTTPS 與雙重驗證、關閉預設帳號。",
+            "value": len(web_nas),
+        })
+
+    # ── 資產盤點 ──
+    if printers:
+        issues.append({
+            "severity": "info", "category": "資產盤點", "icon": "🖨️",
+            "title": f"偵測到 {len(printers)} 台印表機/掃描器",
+            "problem": f"{ips(printers)}",
+            "recommendation": "確認韌體更新、關閉不必要的開放埠（如 9100 直印）。",
+            "value": len(printers),
+        })
+    if not gateway:
+        issues.append({
+            "severity": "info", "category": "拓樸", "icon": "🌐",
+            "title": "未辨識到預設閘道",
+            "problem": "掃描結果未包含閘道設備，可能跨網段或閘道封鎖探測。",
+            "recommendation": "確認掃描網段是否正確；必要時手動指定閘道 IP 檢查。",
+            "value": 0,
+        })
+    if no_vendor:
+        issues.append({
+            "severity": "info", "category": "未知設備", "icon": "❔",
+            "title": f"{len(no_vendor)} 台無法辨識廠牌",
+            "problem": "MAC 無對應 OUI，多為啟用隨機化 MAC 的行動裝置，或非標準設備。",
+            "recommendation": "逐台核對是否為公司資產；非預期設備應查明是否為未授權接入。",
+            "value": len(no_vendor),
+        })
+    if unknown_type:
+        issues.append({
+            "severity": "info", "category": "待確認", "icon": "🔍",
+            "title": f"{len(unknown_type)} 台設備類型待確認",
+            "problem": "僅取得基本指紋，類型無法自動判定。",
+            "recommendation": "可對該 IP 執行深度埠掃描或人工核對以確認用途。",
+            "value": len(unknown_type),
+        })
+
+    # ── 盤點總結（always）──
+    breakdown = "、".join(f"{t} {c}" for t, c in (scan or {}).get("summary", {}).items())
+    issues.append({
+        "severity": "good", "category": "資產盤點", "icon": "✅",
+        "title": f"共盤點 {n} 台設備",
+        "problem": "",
+        "recommendation": f"✓ 網段 {(scan or {}).get('subnet','')}：{breakdown or '—'}。",
+        "value": n,
+    })
+    return _pack(issues, "內網設備盤點完成，未發現明顯風險。")
+
+
 # ═══ 統一分派 ════════════════════════════════════════════════════════════════
 def assess(context: str, payload: dict, networks: list, current: dict) -> dict:
-    """context: scan | netperf | spectrum | heatmap | monitor"""
+    """context: scan | netperf | spectrum | heatmap | monitor | lan"""
     if context == "scan":
         return assess_scan(networks, current, payload.get("analysis"))
     if context == "netperf":
@@ -228,6 +332,8 @@ def assess(context: str, payload: dict, networks: list, current: dict) -> dict:
         return assess_heatmap(payload.get("measurements", []))
     if context == "monitor":
         return assess_monitor(payload.get("samples", []), current)
+    if context == "lan":
+        return assess_lan(payload.get("scan") or payload)
     return _pack([{
         "severity": "info", "category": "未知", "icon": "❓",
         "title": f"未知的建議情境：{context}", "problem": "",

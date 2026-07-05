@@ -6,6 +6,7 @@ New endpoints: /api/netperf, /api/scan/pause|resume, /api/bands,
 import os
 import sys
 import json
+import queue
 import threading
 import time
 from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context
@@ -16,6 +17,8 @@ import heatmap_gen
 import reporter
 import recommender
 import recommendations
+import lan_scanner
+import platform_caps
 import iperf3_mgr
 import stability
 import speedtest_cf
@@ -490,6 +493,107 @@ def api_diagnose_report():
     return Response(
         pdf_bytes, mimetype="application/pdf",
         headers={"Content-Disposition": f"attachment;filename=wifi_diagnosis_{ts}.pdf"})
+
+
+# ─── 平台能力偵測 ─────────────────────────────────────────────────────────────
+@app.route("/api/capabilities")
+def api_capabilities():
+    return jsonify(platform_caps.capabilities())
+
+
+# ─── LAN 有線盤查 ─────────────────────────────────────────────────────────────
+_LAST_LAN = {}      # 最近一次掃描結果（供 result / export 使用）
+
+
+def _sse(etype, data):
+    return f"event: {etype}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+
+@app.route("/api/lan/interfaces")
+def api_lan_interfaces():
+    return jsonify({"interfaces": lan_scanner.list_interfaces()})
+
+
+@app.route("/api/lan/scan/stream")
+def api_lan_scan_stream():
+    """SSE：掃描網段。事件 progress {done,total,host?} / done {result} / error。"""
+    subnet = request.args.get("subnet", "").strip()
+    deep   = request.args.get("deep", "1") == "1"
+    if not subnet:
+        ifs = lan_scanner.list_interfaces()
+        subnet = ifs[0]["subnet_cidr"] if ifs else "192.168.1.0/24"
+
+    q: "queue.Queue" = queue.Queue()
+
+    def prog(done, total, host):
+        # 節流：ping 進度每 8 個回報一次；主機探到就即時回報
+        if host is not None:
+            q.put(("progress", {"done": done, "total": total, "host": host}))
+        elif done == total or done % 8 == 0:
+            q.put(("progress", {"done": done, "total": total, "host": None}))
+
+    def run():
+        global _LAST_LAN
+        try:
+            r = lan_scanner.scan(subnet, deep=deep, progress=prog)
+            _LAST_LAN = r
+            q.put(("done", r))
+        except Exception as e:
+            q.put(("error", {"error": str(e)}))
+        q.put((None, None))
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def gen():
+        yield _sse("start", {"subnet": subnet, "deep": deep})
+        while True:
+            etype, data = q.get()
+            if etype is None:
+                break
+            yield _sse(etype, data)
+
+    return Response(
+        stream_with_context(gen()), mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/lan/result")
+def api_lan_result():
+    return jsonify({"ok": bool(_LAST_LAN), "result": _LAST_LAN})
+
+
+@app.route("/api/lan/ping", methods=["POST"])
+def api_lan_ping():
+    data = request.get_json(silent=True) or {}
+    ip = (data.get("ip") or "").strip()
+    if not ip:
+        return jsonify({"ok": False, "error": "缺少 IP"}), 400
+    return jsonify({"ok": True, "result": lan_scanner.ping(ip, int(data.get("count", 4)))})
+
+
+@app.route("/api/lan/portscan", methods=["POST"])
+def api_lan_portscan():
+    data = request.get_json(silent=True) or {}
+    ip = (data.get("ip") or "").strip()
+    if not ip:
+        return jsonify({"ok": False, "error": "缺少 IP"}), 400
+    return jsonify({"ok": True, "result": lan_scanner.portscan(ip)})
+
+
+@app.route("/api/lan/export")
+def api_lan_export():
+    if not _LAST_LAN:
+        return Response("尚無掃描結果", mimetype="text/plain"), 404
+    fmt = request.args.get("fmt", "csv")
+    ts  = time.strftime("%Y%m%d_%H%M%S")
+    if fmt == "json":
+        return Response(
+            json.dumps(_LAST_LAN, ensure_ascii=False, indent=2, default=str),
+            mimetype="application/json",
+            headers={"Content-Disposition": f"attachment;filename=lan_inventory_{ts}.json"})
+    return Response(
+        lan_scanner.to_csv(_LAST_LAN), mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment;filename=lan_inventory_{ts}.csv"})
 
 
 # ─── Connection stability test ──────────────────────────────────────────────
