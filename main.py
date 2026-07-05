@@ -33,7 +33,7 @@ def _wait_for_server(port: int, timeout: float = 10.0):
             with socket.create_connection(("127.0.0.1", port), timeout=0.5):
                 return True
         except OSError:
-            time.sleep(0.1)
+            time.sleep(0.03)
     return False
 
 
@@ -51,21 +51,26 @@ def main():
 
     print(f"NetInspect Pro running at {url}")
 
-    # Try pywebview first (native macOS window)
+    # Try pywebview first (native macOS window)；任何失敗（含非 ImportError 的
+    # WebKit/GUI 初始化錯誤）都退回瀏覽器，避免直接閃退。
     try:
         import webview  # type: ignore
-        window = webview.create_window(
-            title     = "NetInspect Pro",
-            url       = url,
-            width     = 1280,
-            height    = 820,
-            min_size  = (900, 600),
-            frameless = False,
-        )
-        webview.start(debug=False)
-        return
     except ImportError:
-        pass
+        webview = None
+    if webview is not None:
+        try:
+            webview.create_window(
+                title     = "NetInspect Pro",
+                url       = url,
+                width     = 1280,
+                height    = 820,
+                min_size  = (900, 600),
+                frameless = False,
+            )
+            webview.start(debug=False)
+            return
+        except Exception as e:
+            print(f"[WARN] pywebview 啟動失敗（{e}），改用瀏覽器開啟", file=sys.stderr)
 
     # Fallback: open in system default browser
     import webbrowser

@@ -43,13 +43,10 @@ def _bin(name: str) -> str:
             return p
     return name          # 後援：交給 PATH（含 Windows）
 
-# ── OUI 廠牌查詢（離線快取；首次可能需連網下載一次）─────────────────────────────
-try:
-    from mac_vendor_lookup import MacLookup
-    _MAC = MacLookup()
-except Exception:
-    _MAC = None
-
+# ── OUI 廠牌查詢 ─────────────────────────────────────────────────────────────
+# 註：mac-vendor-lookup 頂層會連帶 import aiohttp/aiofiles（冷啟 ~80-130ms），
+#     而正常情況 OUI 一律讀打包的 data/oui.txt，根本用不到它。
+#     因此延後到「缺打包檔」的後援分支內才 import + 建構，省下每次啟動成本。
 _oui_ready = False
 _OUI = {}          # {6-hex-prefix(str): vendor(str)}，供多執行緒純字典查詢
 _OUI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "oui.txt")
@@ -77,21 +74,23 @@ def _ensure_oui():
                 return
     except Exception:
         pass
-    # 2) 後援：mac-vendor-lookup（首次需網路，之後記憶體查詢）
-    if _MAC is not None:
+    # 2) 後援：mac-vendor-lookup（僅在缺打包檔時才 import + 建構，避免拖慢啟動；
+    #    首次需連網一次，之後走記憶體查詢）
+    try:
+        from mac_vendor_lookup import MacLookup   # 延遲 import（含 aiohttp）
+        _mac = MacLookup()
         try:
-            try:
-                _MAC.lookup("3c:22:fb:00:00:00")
-            except Exception:
-                _MAC.update_vendors()
-            pref = getattr(getattr(_MAC, "async_lookup", None), "prefixes", {}) or {}
-            _OUI = {
-                (k.decode() if isinstance(k, bytes) else str(k)).upper():
-                (v.decode() if isinstance(v, bytes) else str(v))
-                for k, v in pref.items()
-            }
+            _mac.lookup("3c:22:fb:00:00:00")
         except Exception:
-            _OUI = {}
+            _mac.update_vendors()
+        pref = getattr(getattr(_mac, "async_lookup", None), "prefixes", {}) or {}
+        _OUI = {
+            (k.decode() if isinstance(k, bytes) else str(k)).upper():
+            (v.decode() if isinstance(v, bytes) else str(v))
+            for k, v in pref.items()
+        }
+    except Exception:
+        _OUI = {}
     _oui_ready = True
 
 

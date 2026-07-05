@@ -65,10 +65,10 @@ info "Copying frontend…"
 cp -r "$SRC_DIR/frontend" "$APP_RES/frontend"
 
 # Copy data (bundled OUI database for offline vendor lookup)
-if [[ -d "$SRC_DIR/data" ]]; then
-    info "Copying data (OUI database)…"
-    cp -r "$SRC_DIR/data" "$APP_RES/data"
-fi
+# 斷言離線 OUI 資料庫存在且非空，否則現場離線掃描會退回連網下載而卡住
+[[ -s "$SRC_DIR/data/oui.txt" ]] || error "data/oui.txt 缺失或為空——離線 OUI 廠牌查詢會失效，中止打包"
+info "Copying data (OUI database)…"
+cp -r "$SRC_DIR/data" "$APP_RES/data"
 
 # ── 4. Create a relocatable Python venv inside the bundle ────────────────────
 info "Creating bundled Python venv (this may take a minute)…"

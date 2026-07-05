@@ -38,6 +38,21 @@ _monitor: scanner.SignalMonitor = scanner.SignalMonitor()
 _scan_running = False  # flag for continuous scan
 _scan_lock    = threading.Lock()
 
+
+# ─── 結束時清理背景子程序/執行緒（避免孤兒 iperf3 -s 佔埠、殘留執行緒）──────────
+import atexit
+
+
+@atexit.register
+def _shutdown_cleanup():
+    for stop in (lambda: _monitor.stop(),
+                 lambda: iperf3_mgr.get_server().stop(),
+                 lambda: stability.TEST.stop()):
+        try:
+            stop()
+        except Exception:
+            pass
+
 # ─── Static frontend ─────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -223,14 +238,26 @@ def api_monitor_data():
 def api_monitor_stream():
     def event_gen():
         last_len = 0
-        while True:
-            pts = _monitor.get_data()
-            if len(pts) > last_len:
-                for pt in pts[last_len:]:
-                    yield f"data: {json.dumps(pt)}\n\n"
-                last_len = len(pts)
-            time.sleep(0.5)
-    return Response(event_gen(), mimetype="text/event-stream",
+        idle = 0
+        try:
+            # 監控停止且已無新資料一段時間就自行收斂；客戶端斷線時 yield 會拋
+            # GeneratorExit，交由 finally 結束，避免執行緒無限殘留。
+            while True:
+                pts = _monitor.get_data()
+                if len(pts) > last_len:
+                    for pt in pts[last_len:]:
+                        yield f"data: {json.dumps(pt)}\n\n"
+                    last_len = len(pts)
+                    idle = 0
+                else:
+                    idle += 1
+                if not getattr(_monitor, "_running", True) and idle > 6:
+                    break                      # 監控已停 + 3 秒無新資料 → 結束串流
+                yield ": keep-alive\n\n"        # 心跳：讓斷線能即時觸發 GeneratorExit
+                time.sleep(0.5)
+        except GeneratorExit:
+            return
+    return Response(stream_with_context(event_gen()), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
