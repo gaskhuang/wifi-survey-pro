@@ -771,3 +771,14 @@ nav { padding: 6px 0; flex: 1; }
   border-radius:6px; padding:7px 10px; font-size:12px; }
 .set-keys .set-model { flex:0 0 160px; }
 .set-actions { display:flex; align-items:center; gap:12px; margin-top:14px; }
+
+/* ═══ AI 診斷分頁 ════════════════════════════════════════════════════════════ */
+.dg2-btns { display:flex; flex-wrap:wrap; gap:8px; }
+.dg2-step { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:6px;
+  font-size:12.5px; margin-bottom:5px; background:var(--bg-base); border:1px solid var(--border); }
+.dg2-step.ok   .dg2-mark { color:#22c55e; }
+.dg2-step.fail .dg2-mark { color:#ef4444; }
+.dg2-step.fail { border-color:rgba(239,68,68,.4); }
+.dg2-mark { font-weight:700; width:14px; text-align:center; flex:0 0 auto; }
+.dg2-name { font-weight:600; color:var(--text-1); flex:0 0 auto; min-width:180px; }
+.dg2-detail { color:var(--text-2); }

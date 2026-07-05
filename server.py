@@ -22,6 +22,7 @@ import platform_caps
 import config as appconfig
 import ai_providers
 import traffic_monitor
+import net_diag
 import iperf3_mgr
 import stability
 import speedtest_cf
@@ -532,6 +533,61 @@ def api_ai_test():
     data = request.get_json(silent=True) or {}
     provider = data.get("provider") or appconfig.get("ai.provider", "offline")
     return jsonify(ai_providers.test(provider))
+
+
+# ─── AI 診斷 / 網路診斷工具（P3）──────────────────────────────────────────────
+def _ai_enhance(title, assessment):
+    """若已設定 AI 供應商，就把離線診斷結果送去做深入分析（best-effort）。"""
+    provider = appconfig.get("ai.provider", "offline")
+    if provider == "offline":
+        return None
+    try:
+        lines = [f"- [{i['severity']}] {i['title']}：{i.get('problem','')} → {i['recommendation']}"
+                 for i in assessment.get("issues", [])]
+        user = (f"以下是網路現場「{title}」的自動診斷結果（分數 {assessment.get('score')}）：\n"
+                + "\n".join(lines)
+                + "\n\n請以繁體中文，站在資深網路工程師角度，給出更深入的可能根因與具體排查步驟（條列、精簡）。")
+        txt = ai_providers.call_provider(
+            provider, "你是資深網路工程師，協助現場工程師快速定位並解決網路問題。", user)
+        return {"provider": provider, "text": str(txt)}
+    except Exception as e:
+        return {"provider": provider, "error": str(e)[:180]}
+
+
+@app.route("/api/diag/run", methods=["POST"])
+def api_diag_run():
+    data  = request.get_json(silent=True) or {}
+    topic = data.get("topic", "osi")
+    want_ai = bool(data.get("ai"))
+    result = net_diag.diagnose_all() if topic == "all" else net_diag.diagnose(topic)
+    if want_ai:
+        ai = _ai_enhance(topic, result)
+        if ai:
+            result["ai"] = ai
+    return jsonify({"ok": True, "topic": topic, "result": result})
+
+
+@app.route("/api/diag/subnet", methods=["POST"])
+def api_diag_subnet():
+    data = request.get_json(silent=True) or {}
+    cidr = (data.get("cidr") or "").strip()
+    try:
+        return jsonify({"ok": True, "result": net_diag.subnet_calc(cidr)})
+    except ValueError as e:
+        return jsonify({"ok": False, "error": f"輸入格式不正確（例：192.168.1.0/24）：{e}"}), 400
+
+
+@app.route("/api/diag/traceroute")
+def api_diag_traceroute():
+    host = (request.args.get("host") or net_diag.TEST_IP).strip()
+    return jsonify({"ok": True, "result": net_diag.traceroute(host)})
+
+
+@app.route("/api/diag/info")
+def api_diag_info():
+    return jsonify({"route": net_diag.route_info(),
+                    "dns_servers": net_diag.dns_servers(),
+                    "ai_provider": appconfig.get("ai.provider", "offline")})
 
 
 # ─── LAN 有線盤查 ─────────────────────────────────────────────────────────────

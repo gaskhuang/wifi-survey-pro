@@ -56,6 +56,9 @@
       <a href="#" class="nav-item" data-tab="traffic">
         <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-4 4 3 5-7"/></svg>流量監測
       </a>
+      <a href="#" class="nav-item" data-tab="diag">
+        <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>AI 診斷
+      </a>
       <a href="#" class="nav-item" data-tab="report">
         <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>報告
       </a>
@@ -889,6 +892,52 @@
       <div class="reco-panel" id="lan-reco" hidden></div>
     </div>
 
+    <!-- ═══ TAB: AI 診斷 ══════════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-diag">
+      <div class="tab-header">
+        <h1>AI 診斷</h1>
+        <div class="actions">
+          <label class="lan-check" id="dg2-ai-wrap" style="display:none">
+            <input type="checkbox" id="dg2-ai"> 進階 AI 分析
+          </label>
+          <span id="dg2-provider" class="muted" style="font-size:11px"></span>
+        </div>
+      </div>
+
+      <div class="set-section">
+        <div class="section-title">一鍵診斷</div>
+        <p class="hint">點按鈕即依離線規則引擎判讀；設定 AI 供應商後可勾「進階 AI 分析」取得更深入建議。</p>
+        <div class="dg2-btns">
+          <button class="btn btn-primary" data-topic="all">🩺 一鍵全項</button>
+          <button class="btn btn-outline" data-topic="osi">OSI 由下而上</button>
+          <button class="btn btn-outline" data-topic="dns">DNS vs 斷線</button>
+          <button class="btn btn-outline" data-topic="dhcp">DHCP / IP</button>
+          <button class="btn btn-outline" data-topic="nat">NAT / 路由</button>
+        </div>
+        <div id="dg2-status" class="muted" style="font-size:12px;margin-top:8px"></div>
+      </div>
+
+      <div id="dg2-steps" class="set-section" style="display:none">
+        <div class="section-title">檢查步驟</div>
+        <div id="dg2-steps-list"></div>
+      </div>
+
+      <div class="reco-panel" id="dg2-reco" hidden></div>
+      <div id="dg2-ai-out" class="set-section" style="display:none">
+        <div class="section-title">🤖 AI 深入分析 <span id="dg2-ai-provider" class="muted" style="font-size:11px"></span></div>
+        <div id="dg2-ai-text" style="font-size:13px;line-height:1.7;white-space:pre-wrap;color:var(--text-1)"></div>
+      </div>
+
+      <div class="set-section">
+        <div class="section-title">子網計算機</div>
+        <div class="set-actions" style="margin-top:0">
+          <input type="text" id="dg2-cidr" class="select-input" style="width:190px" placeholder="192.168.1.0/24">
+          <button class="btn btn-primary" id="btn-dg2-subnet">計算</button>
+        </div>
+        <div id="dg2-subnet-out" class="lan-typebar" style="margin-top:14px"></div>
+      </div>
+    </div>
+
     <!-- ═══ TAB: 流量異常監測 ═════════════════════════════════════════════════ -->
     <div class="tab-pane" id="tab-traffic">
       <div class="tab-header">
@@ -1051,6 +1100,7 @@
 <script src="js/settings.js"></script>
 <script src="js/lan.js"></script>
 <script src="js/traffic.js"></script>
+<script src="js/diag.js"></script>
 <script src="js/spectrum.js"></script>
 <script src="js/scanner.js"></script>
 <script src="js/channels.js"></script>
