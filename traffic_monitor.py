@@ -21,16 +21,24 @@ from lan_scanner import _bin, _vendor, _ensure_oui
 # tcpdump -e -n -t 一行示例：
 #   aa:bb:cc:dd:ee:ff > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 60: Request ...
 #   aa:bb.. > 11:22.., ethertype IPv4 (0x0800), length 98: 192.168.1.5.443 > 8.8.8.8.55751: ...
+# 貪婪 .* 讓 VLAN(802.1Q)/QinQ 標籤幀取到最內層（真正 L3）的 ethertype 與 length
 _LINE = re.compile(
     r"^([0-9a-f]{2}(?::[0-9a-f]{2}){5}) > ([0-9a-f]{2}(?::[0-9a-f]{2}){5}),"
-    r"\s*ethertype (\S+)[^,]*, length (\d+):")
-_IPV4 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})")
+    r".*ethertype (\S+)[^,]*, length (\d+):")
+_OCTET = r"(?:25[0-5]|2[0-4]\d|1?\d?\d)"        # 0–255，避免抓到內文非 IP 數字
+# 不加尾端邊界：tcpdump 以 IP.port 呈現（如 192.168.1.5.443），需能取出前 4 段 IP
+_IPV4 = re.compile(r"(?<![\d.])(" + _OCTET + r"(?:\." + _OCTET + r"){3})")
+_ARP_TELL = re.compile(r"\btell (" + _OCTET + r"(?:\." + _OCTET + r"){3})")
 
 BROADCAST = "ff:ff:ff:ff:ff:ff"
 
 
 def _is_multicast(mac: str) -> bool:
-    return mac.startswith(("01:00:5e", "33:33", "01:80:c2", "01:00:0c"))
+    """L2 群播：目的 MAC 第一個 byte 最低位=1（排除廣播）。"""
+    try:
+        return (int(mac[:2], 16) & 1) == 1 and mac != BROADCAST
+    except (ValueError, IndexError):
+        return False
 
 
 def can_capture() -> bool:
@@ -65,10 +73,12 @@ def list_interfaces() -> list:
     try:
         out = subprocess.run([_bin("ifconfig"), "-l"], capture_output=True,
                              text=True, timeout=4).stdout
-        names = [n for n in out.split()
-                 if n.startswith(("en", "bridge", "utun", "eth"))]
+        # 只列乙太類介面（utun/lo/ppp 無 L2 標頭，tcpdump -e 無法解析）
+        names = [n for n in out.split() if n.startswith(("en", "bridge", "eth"))]
     except Exception:
-        names = [dflt]
+        names = []
+    if dflt not in names:                 # 預設路由走 VPN/tunnel 時，改用實體介面
+        dflt = names[0] if names else dflt
     if dflt in names:
         names.remove(dflt)
     ordered = [dflt] + names
@@ -83,9 +93,14 @@ def _parse(line: str):
     src, dst, etype, length = m.group(1), m.group(2), m.group(3), int(m.group(4))
     src_ip = None
     rest = line[m.end():]
-    ipm = _IPV4.search(rest)
-    if ipm:
-        src_ip = ipm.group(1)
+    if etype == "ARP":
+        tm = _ARP_TELL.search(rest)      # ARP 來源 IP 在 "tell X"（who-has 後面是目標，不能用）
+        if tm:
+            src_ip = tm.group(1)
+    elif etype == "IPv4":
+        ipm = _IPV4.search(rest)         # 只有 IPv4 幀才記來源 IP，避免非 IP 幀誤判
+        if ipm:
+            src_ip = ipm.group(1)
     return src, dst, etype, length, src_ip
 
 
@@ -97,6 +112,7 @@ class Capture:
         self.duration = max(3, min(120, duration))
         self.proc = None
         self._stop = threading.Event()
+        self._stderr = []       # tcpdump stderr 尾段（供失敗時回報真正原因）
         # 彙整
         self.by_src = {}        # mac → {"pkts","bytes","bcast","mcast","arp","ip"}
         self.total_pkts = 0
@@ -107,9 +123,14 @@ class Capture:
 
     def stop(self):
         self._stop.set()
-        if self.proc and self.proc.poll() is None:
+        p = self.proc
+        if p and p.poll() is None:
             try:
-                self.proc.terminate()
+                p.terminate()
+                try:
+                    p.wait(timeout=3)          # 等 SIGTERM 生效
+                except Exception:
+                    p.kill()                   # 逾時強制結束，確保不留孤兒程序
             except Exception:
                 pass
 
@@ -147,7 +168,17 @@ class Capture:
                                      text=True, bufsize=1, creationflags=flags)
         self.started = time.time()
         last_emit = 0.0
-        # 逐行讀，同時以時間 / stop 控制結束
+        # 持續汲取 stderr（避免 pipe 填滿阻塞，並保留錯誤訊息供失敗時回報）
+        def _drain_err():
+            try:
+                for l in self.proc.stderr:
+                    self._stderr.append(l.strip())
+                    if len(self._stderr) > 20:
+                        self._stderr.pop(0)
+            except Exception:
+                pass
+        errt = threading.Thread(target=_drain_err, daemon=True)
+        errt.start()
         watchdog = threading.Thread(target=self._watchdog, daemon=True)
         watchdog.start()
         try:
@@ -165,6 +196,15 @@ class Capture:
             pass
         finally:
             self.stop()
+        # 完全沒抓到封包且 tcpdump 有錯誤 → 回報真正原因（而非誤導的「封包極少」）
+        if self.total_pkts == 0:
+            errt.join(timeout=1)
+            errtxt = " ".join(self._stderr)
+            rc = self.proc.returncode
+            if (rc not in (0, None)) or any(k in errtxt for k in (
+                    "No such device", "permission", "BIOCSETIF",
+                    "not permitted", "syntax error", "failed")):
+                raise RuntimeError(f"tcpdump 擷取失敗：{errtxt[:200] or ('return code ' + str(rc))}")
         return self.analyze()
 
     def _watchdog(self):
