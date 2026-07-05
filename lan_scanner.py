@@ -18,8 +18,19 @@ import csv
 import re
 import socket
 import ipaddress
+import itertools
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+MAX_HOSTS = 1024          # 單次掃描主機數上限
+MAX_ADDRS = 4096          # 拒絕超過此位址數的網段（避免誤掃/資源耗盡）
+
+
+def is_valid_ipv4(s: str) -> bool:
+    try:
+        return isinstance(ipaddress.ip_address(s), ipaddress.IPv4Address)
+    except (ValueError, TypeError):
+        return False
 
 import platform_caps as caps
 
@@ -295,14 +306,23 @@ def _read_arp_table() -> dict:
         out = subprocess.run([_bin("arp"), "-a"], capture_output=True, text=True,
                              timeout=8, creationflags=flags).stdout
         for line in out.splitlines():
-            ipm = _IP_RE.search(line)
             macm = _MAC_RE.search(line)
-            if not ipm or not macm:
+            if not macm:
+                continue
+            # 優先取括號內 IP（macOS「host (ip) at mac」，避免抓到主機名中的假四段），
+            # 否則退回第一個像 IP 的字串（Windows 格式），並一律驗證為合法 IPv4。
+            pm = re.search(r"\((\d{1,3}(?:\.\d{1,3}){3})\)", line)
+            if pm:
+                ip = pm.group(1)
+            else:
+                im = _IP_RE.search(line)
+                ip = im.group(0) if im else ""
+            if not is_valid_ipv4(ip):
                 continue
             mac = _norm_mac(macm.group(1))
             if not mac or mac in ("00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"):
                 continue
-            table[ipm.group(1)] = mac
+            table[ip] = mac
     except Exception:
         pass
     return table
@@ -372,11 +392,14 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
     回傳 {subnet, gateway, hosts:[...], summary:{...}, alive_count, total}
     """
     net = ipaddress.ip_network(subnet_cidr, strict=False)
-    hosts_iter = list(net.hosts())
+    if net.version != 4:
+        raise ValueError("目前僅支援 IPv4 網段掃描")
+    if net.num_addresses > MAX_ADDRS:
+        raise ValueError(f"網段過大（{net.num_addresses:,} 個位址）。"
+                         f"請改用 /20 以上（≤{MAX_ADDRS}）較小的網段。")
+    # 惰性取前 MAX_HOSTS 個，避免超大網段全量物化吃爆記憶體
+    hosts_iter = list(itertools.islice(net.hosts(), MAX_HOSTS))
     total = len(hosts_iter)
-    if total > 1024:
-        hosts_iter = hosts_iter[:1024]     # 安全上限，避免誤掃巨大網段
-        total = 1024
     gateway = _default_gateway()
     self_ip = _primary_ip()
     _ensure_oui()               # 並發查詢前先預熱 OUI 資料庫
@@ -399,7 +422,7 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
             if progress:
                 progress(done, total, None)
 
-    # 2) 讀 ARP 表（包含未回 ICMP 但 L2 可達者）
+    # 2) 讀 ARP 表（包含未回 ICMP 但 L2 可達者；key 已在 _read_arp_table 驗證為合法 IPv4）
     arp = _read_arp_table()
     present = set(alive) | {ip for ip in arp if ipaddress.ip_address(ip) in net}
 
@@ -407,13 +430,28 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
     hosts = []
     plist = sorted(present, key=lambda x: tuple(int(o) for o in x.split(".")))
 
+    # 3a) 深度掃描：集中所有 (ip, port) 到單一扁平執行緒池，避免巢狀池造成執行緒爆量
+    ports_by_ip = {ip: set() for ip in plist}
+    if deep and plist:
+        tasks = [(ip, port) for ip in plist for port in SCAN_PORTS]
+        with ThreadPoolExecutor(max_workers=100) as ex:
+            futs = {ex.submit(_probe_port, ip, port, 0.4): (ip, port)
+                    for ip, port in tasks}
+            for f in as_completed(futs):
+                if should_stop and should_stop():
+                    break
+                ip, port = futs[f]
+                try:
+                    if f.result():
+                        ports_by_ip[ip].add(port)
+                except Exception:
+                    pass
+
     def _fingerprint(ip):
         mac = arp.get(ip) or _arp_lookup(ip)      # 整份快照優先，缺則逐台查
         vendor = _vendor(mac)
         hostname = _hostname(ip)
-        ports = set()
-        if deep:
-            ports = set(p["port"] for p in portscan(ip)["open_ports"])
+        ports = ports_by_ip.get(ip, set())        # 埠已於 3a 集中掃完
         dtype, conf = _type_from(vendor, ports, hostname, ip == gateway,
                                  is_self=(ip == self_ip))
         sources = ["ping"] if ip in alive else []

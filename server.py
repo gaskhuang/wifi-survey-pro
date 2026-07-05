@@ -19,6 +19,8 @@ import recommender
 import recommendations
 import lan_scanner
 import platform_caps
+import config as appconfig
+import ai_providers
 import iperf3_mgr
 import stability
 import speedtest_cf
@@ -501,6 +503,36 @@ def api_capabilities():
     return jsonify(platform_caps.capabilities())
 
 
+# ─── 設定（AI 供應商 / 隱私 / 白標）────────────────────────────────────────────
+@app.route("/api/settings")
+def api_settings_get():
+    return jsonify({"ok": True, "settings": appconfig.public_view()})
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings_save():
+    patch = request.get_json(silent=True) or {}
+    # 安全：ai.keys 中的空字串視為「不變更」，避免把已存金鑰洗掉
+    try:
+        keys = patch.get("ai", {}).get("keys")
+        if isinstance(keys, dict):
+            patch["ai"]["keys"] = {k: v for k, v in keys.items() if v}
+        cloud = patch.get("ai", {}).get("cloud")
+        if isinstance(cloud, dict) and cloud.get("token") == "":
+            cloud.pop("token", None)
+    except Exception:
+        pass
+    appconfig.save(patch)
+    return jsonify({"ok": True, "settings": appconfig.public_view()})
+
+
+@app.route("/api/ai/test", methods=["POST"])
+def api_ai_test():
+    data = request.get_json(silent=True) or {}
+    provider = data.get("provider") or appconfig.get("ai.provider", "offline")
+    return jsonify(ai_providers.test(provider))
+
+
 # ─── LAN 有線盤查 ─────────────────────────────────────────────────────────────
 _LAST_LAN = {}      # 最近一次掃描結果（供 result / export 使用）
 
@@ -514,19 +546,35 @@ def api_lan_interfaces():
     return jsonify({"interfaces": lan_scanner.list_interfaces()})
 
 
+def _validate_subnet(subnet: str):
+    """回傳 (正規化網段, 錯誤訊息)。限 IPv4、私網、大小合理。"""
+    import ipaddress
+    if not subnet:
+        ifs = lan_scanner.list_interfaces()
+        return (ifs[0]["subnet_cidr"] if ifs else "192.168.1.0/24"), None
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+    except ValueError:
+        return None, "網段格式不正確（例：192.168.1.0/24）"
+    if net.version != 4:
+        return None, "目前僅支援 IPv4 網段"
+    if not (net.is_private or net.is_loopback):
+        return None, "為安全起見僅允許掃描私有網段（10/8、172.16/12、192.168/16）"
+    if net.num_addresses > lan_scanner.MAX_ADDRS:
+        return None, f"網段過大，請改用 ≤{lan_scanner.MAX_ADDRS} 位址（/20 以上）的網段"
+    return str(net), None
+
+
 @app.route("/api/lan/scan/stream")
 def api_lan_scan_stream():
     """SSE：掃描網段。事件 progress {done,total,host?} / done {result} / error。"""
-    subnet = request.args.get("subnet", "").strip()
-    deep   = request.args.get("deep", "1") == "1"
-    if not subnet:
-        ifs = lan_scanner.list_interfaces()
-        subnet = ifs[0]["subnet_cidr"] if ifs else "192.168.1.0/24"
+    subnet, err = _validate_subnet(request.args.get("subnet", "").strip())
+    deep = request.args.get("deep", "1") == "1"
 
     q: "queue.Queue" = queue.Queue()
+    stop_evt = threading.Event()
 
     def prog(done, total, host):
-        # 節流：ping 進度每 8 個回報一次；主機探到就即時回報
         if host is not None:
             q.put(("progress", {"done": done, "total": total, "host": host}))
         elif done == total or done % 8 == 0:
@@ -535,22 +583,34 @@ def api_lan_scan_stream():
     def run():
         global _LAST_LAN
         try:
-            r = lan_scanner.scan(subnet, deep=deep, progress=prog)
-            _LAST_LAN = r
-            q.put(("done", r))
+            r = lan_scanner.scan(subnet, deep=deep, progress=prog,
+                                 should_stop=stop_evt.is_set)
+            if not stop_evt.is_set():
+                _LAST_LAN = r
+                q.put(("done", r))
         except Exception as e:
             q.put(("error", {"error": str(e)}))
         q.put((None, None))
 
+    if err:
+        # 參數錯誤：直接回一個只含 error 事件的短串流（前端統一以 error 事件處理）
+        def gen_err():
+            yield _sse("error", {"error": err})
+        return Response(stream_with_context(gen_err()), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     threading.Thread(target=run, daemon=True).start()
 
     def gen():
-        yield _sse("start", {"subnet": subnet, "deep": deep})
-        while True:
-            etype, data = q.get()
-            if etype is None:
-                break
-            yield _sse(etype, data)
+        try:
+            yield _sse("start", {"subnet": subnet, "deep": deep})
+            while True:
+                etype, data = q.get()
+                if etype is None:
+                    break
+                yield _sse(etype, data)
+        finally:
+            stop_evt.set()      # 客戶端斷線 → 通知背景掃描盡快停止，避免孤兒掃描堆疊
 
     return Response(
         stream_with_context(gen()), mimetype="text/event-stream",
@@ -566,17 +626,21 @@ def api_lan_result():
 def api_lan_ping():
     data = request.get_json(silent=True) or {}
     ip = (data.get("ip") or "").strip()
-    if not ip:
-        return jsonify({"ok": False, "error": "缺少 IP"}), 400
-    return jsonify({"ok": True, "result": lan_scanner.ping(ip, int(data.get("count", 4)))})
+    if not lan_scanner.is_valid_ipv4(ip):
+        return jsonify({"ok": False, "error": "IP 格式不正確"}), 400
+    try:
+        count = max(1, min(10, int(data.get("count", 4))))
+    except (ValueError, TypeError):
+        count = 4
+    return jsonify({"ok": True, "result": lan_scanner.ping(ip, count)})
 
 
 @app.route("/api/lan/portscan", methods=["POST"])
 def api_lan_portscan():
     data = request.get_json(silent=True) or {}
     ip = (data.get("ip") or "").strip()
-    if not ip:
-        return jsonify({"ok": False, "error": "缺少 IP"}), 400
+    if not lan_scanner.is_valid_ipv4(ip):
+        return jsonify({"ok": False, "error": "IP 格式不正確"}), 400
     return jsonify({"ok": True, "result": lan_scanner.portscan(ip)})
 
 

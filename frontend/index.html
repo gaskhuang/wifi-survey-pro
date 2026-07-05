@@ -56,6 +56,9 @@
       <a href="#" class="nav-item" data-tab="report">
         <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>報告
       </a>
+      <a href="#" class="nav-item" data-tab="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>設定
+      </a>
     </nav>
 
     <!-- Current connection -->
@@ -949,11 +952,57 @@
       </div>
     </div>
 
+    <!-- ═══ TAB: 設定 ═════════════════════════════════════════════════════════ -->
+    <div class="tab-pane" id="tab-settings">
+      <div class="tab-header"><h1>設定</h1></div>
+
+      <div class="set-section">
+        <div class="section-title">AI 分析引擎</div>
+        <p class="hint">離線引擎免金鑰、離線可用；自備金鑰（BYOK）直接呼叫你選的供應商；進階雲端為付費分析（資料上傳分析主機，地端只顯示結果）。</p>
+        <div class="set-providers" id="set-providers">
+          <label class="set-radio"><input type="radio" name="ai-provider" value="offline"><span>離線規則引擎 <em>免金鑰・預設</em></span></label>
+          <label class="set-radio"><input type="radio" name="ai-provider" value="openai"><span>OpenAI</span></label>
+          <label class="set-radio"><input type="radio" name="ai-provider" value="gemini"><span>Google Gemini</span></label>
+          <label class="set-radio"><input type="radio" name="ai-provider" value="deepseek"><span>DeepSeek</span></label>
+          <label class="set-radio"><input type="radio" name="ai-provider" value="claude"><span>Anthropic Claude</span></label>
+          <label class="set-radio"><input type="radio" name="ai-provider" value="cloud"><span>進階雲端分析 <em>付費・訂閱</em></span></label>
+        </div>
+
+        <div class="set-keys">
+          <div class="form-row"><label>OpenAI 金鑰</label><input type="password" id="key-openai" placeholder="sk-…（留空 = 不變更）"><input type="text" id="model-openai" class="set-model" placeholder="模型"></div>
+          <div class="form-row"><label>Gemini 金鑰</label><input type="password" id="key-gemini" placeholder="AIza…"><input type="text" id="model-gemini" class="set-model" placeholder="模型"></div>
+          <div class="form-row"><label>DeepSeek 金鑰</label><input type="password" id="key-deepseek" placeholder="sk-…"><input type="text" id="model-deepseek" class="set-model" placeholder="模型"></div>
+          <div class="form-row"><label>Claude 金鑰</label><input type="password" id="key-claude" placeholder="sk-ant-…"><input type="text" id="model-claude" class="set-model" placeholder="模型"></div>
+          <div class="form-row"><label>雲端端點</label><input type="text" id="cloud-endpoint" placeholder="https://你的分析主機/analyze"></div>
+          <div class="form-row"><label>雲端授權 Token</label><input type="password" id="cloud-token" placeholder="訂閱授權 token"></div>
+        </div>
+        <div class="set-actions">
+          <button class="btn btn-primary" id="btn-set-save">儲存設定</button>
+          <button class="btn btn-outline" id="btn-set-test">測試連線</button>
+          <span id="set-status" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
+
+      <div class="set-section">
+        <div class="section-title">白標（報告抬頭）</div>
+        <p class="hint">填入貴公司資訊，檢測報告會以你的品牌呈現，交付客戶時更專業。</p>
+        <div class="form-row"><label>公司名稱</label><input type="text" id="brand-company" placeholder="蓋斯克科技"></div>
+        <div class="form-row"><label>聯絡資訊</label><input type="text" id="brand-contact" placeholder="電話 / Email / 網址"></div>
+        <div class="set-actions"><button class="btn btn-primary" id="btn-brand-save">儲存白標</button></div>
+      </div>
+
+      <div class="set-section">
+        <div class="section-title">隱私</div>
+        <label class="lan-check"><input type="checkbox" id="priv-plaintext"> 允許在本機保留明文診斷 log（預設關閉，商用建議關閉）</label>
+      </div>
+    </div>
+
   </main>
 </div>
 
 <script src="js/app.js"></script>
 <script src="js/reco.js"></script>
+<script src="js/settings.js"></script>
 <script src="js/lan.js"></script>
 <script src="js/spectrum.js"></script>
 <script src="js/scanner.js"></script>

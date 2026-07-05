@@ -79,7 +79,11 @@ const LAN = (() => {
       showStatus(msg, true);
       stopScan();
     });
-    _es.onerror = () => { if (_result) return; stopScan(); };
+    _es.onerror = () => {
+      if (_result) return;                 // 已完成，忽略關閉時的 error
+      showStatus("與伺服器的連線中斷，掃描已停止，請重試", true);
+      stopScan();
+    };
   }
 
   function stopScan() {
