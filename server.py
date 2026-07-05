@@ -590,8 +590,43 @@ def api_diag_info():
                     "ai_provider": appconfig.get("ai.provider", "offline")})
 
 
+# ─── 整合檢測報告（P4）────────────────────────────────────────────────────────
+@app.route("/api/report/full", methods=["POST"])
+def api_report_full():
+    """一鍵整合報告：伺服器端彙整 Wi-Fi + LAN + 網路診斷，套白標產出 PDF。"""
+    data      = request.get_json(silent=True) or {}
+    site_info = data.get("site_info", {})
+    cfg       = appconfig.load()
+    branding  = cfg.get("branding", {})
+
+    # Wi-Fi 現況
+    try:
+        networks = scanner.scan_networks()
+        analysis = analyzer.analyze_channels(networks)
+        current  = scanner.current_connection()
+    except Exception:
+        networks, analysis, current = [], {}, {}
+    # 網路診斷（一鍵全項）
+    try:
+        diag = net_diag.diagnose_all()
+    except Exception:
+        diag = {}
+
+    sections = {
+        "wifi": {"current": current, "networks": networks, "analysis": analysis},
+        "lan":  _LAST_LAN or {},
+        "diag": diag,
+        "traffic": _LAST_TRAFFIC or {},
+    }
+    pdf = reporter.generate_full_report(sections, site_info, branding)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f"attachment;filename=network_inspection_{ts}.pdf"})
+
+
 # ─── LAN 有線盤查 ─────────────────────────────────────────────────────────────
 _LAST_LAN = {}      # 最近一次掃描結果（供 result / export 使用）
+_LAST_TRAFFIC = {}  # 最近一次流量監測結果（供整合報告使用）
 
 
 def _sse(etype, data):
@@ -721,8 +756,10 @@ def api_traffic_stream():
     cap = traffic_monitor.Capture(iface, duration)
 
     def run():
+        global _LAST_TRAFFIC
         try:
             result = cap.run(on_stats=lambda s: q.put(("stats", s)))
+            _LAST_TRAFFIC = result
             q.put(("done", result))
         except PermissionError as e:
             q.put(("error", {"error": str(e), "need_perm": True}))

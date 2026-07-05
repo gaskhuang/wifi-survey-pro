@@ -4,6 +4,39 @@
 
 document.getElementById("rep-date").valueAsDate = new Date();
 document.getElementById("btn-gen-report").addEventListener("click", generateReport);
+document.getElementById("btn-gen-full").addEventListener("click", generateFullReport);
+
+// 整合檢測報告（Wi-Fi + LAN + 診斷，含白標）— 伺服器端彙整
+async function generateFullReport() {
+  const btn = document.getElementById("btn-gen-full");
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<div class="spinner" style="width:13px;height:13px;border-color:rgba(255,255,255,.3);border-top-color:#fff"></div> 彙整中…`;
+  try {
+    const site_info = {
+      site:     document.getElementById("rep-site").value,
+      client:   document.getElementById("rep-client").value,
+      surveyor: document.getElementById("rep-surveyor").value,
+      date:     document.getElementById("rep-date").value,
+    };
+    const r = await fetch("/api/report/full", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ site_info }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+    a.href = url; a.download = `network-inspection-${ts}.pdf`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    alert("完整報告產生失敗：" + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
 
 // Capture spectrum canvas as base64 PNG
 function _captureSpectrum() {

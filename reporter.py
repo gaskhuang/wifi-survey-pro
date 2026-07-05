@@ -535,6 +535,164 @@ def _fallback_diagnosis_html(data) -> str:
 <p>健康分數: {ai.get('score','—')}/100</p><ul>{rows}</ul></body></html>"""
 
 
+# ── 整合檢測報告（Wi-Fi + LAN + 診斷 + 流量），支援白標 ──────────────────────────
+def generate_full_report(sections: dict, site_info: dict = None,
+                         branding: dict = None) -> bytes:
+    try:
+        from reportlab.lib.pagesizes import A4  # noqa: F401 — probe availability
+        return _build_full_report(sections, site_info or {}, branding or {})
+    except ImportError:
+        return b"reportlab not installed"
+
+
+def _build_full_report(sections, site_info, branding):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, HRFlowable, PageBreak)
+
+    FONT = _register_fonts()
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm,
+                            title="Network Inspection Report")
+    BLUE  = colors.HexColor("#1e40af")
+    BLUE2 = colors.HexColor("#1d4ed8")
+    GRAY  = colors.HexColor("#64748b")
+
+    def st(name, size, color=colors.black, align=TA_LEFT, space_after=4, bold=False):
+        return ParagraphStyle(name, fontName=("CJK-Bold" if bold and FONT == "CJK" else FONT),
+                              fontSize=size, textColor=color, alignment=align,
+                              spaceAfter=space_after, leading=size*1.4)
+
+    H1  = st("H1", 20, color=BLUE, align=TA_CENTER, space_after=6, bold=True)
+    H2  = st("H2", 13, color=BLUE2, space_after=6, bold=True)
+    BODY = st("Body", 9, space_after=3)
+    SMAL = st("Smal", 8, color=GRAY, space_after=2)
+    CO  = st("Co", 15, color=colors.black, align=TA_CENTER, space_after=2, bold=True)
+
+    story = []
+
+    # ── 封面 / 抬頭（白標）──
+    company = branding.get("company") or ""
+    if company:
+        story.append(Paragraph(company, CO))
+    story.append(Paragraph("網路現場檢測報告", H1))
+    story.append(Paragraph("Network Site Inspection Report", st("sub", 10, color=GRAY, align=TA_CENTER, space_after=10)))
+    story.append(HRFlowable(width="100%", thickness=2, color=BLUE))
+    story.append(Spacer(1, 0.4*cm))
+    info_rows = [
+        ["場地", site_info.get("site", "—")],
+        ["客戶", site_info.get("client", "—")],
+        ["檢測人員", site_info.get("surveyor", "—")],
+        ["檢測日期", site_info.get("date") or datetime.now().strftime("%Y-%m-%d")],
+    ]
+    if branding.get("contact"):
+        info_rows.append(["服務廠商", f"{company}　{branding['contact']}"])
+    story += [_kv_table(info_rows, FONT), Spacer(1, 0.5*cm)]
+
+    # ── 摘要（綜合健康）──
+    diag = sections.get("diag") or {}
+    wifi = sections.get("wifi") or {}
+    lan  = sections.get("lan") or {}
+    traffic = sections.get("traffic") or {}
+    all_issues = []
+    for src in (diag, traffic):
+        all_issues += [i for i in src.get("issues", []) if i.get("severity") != "good"]
+
+    crit = sum(1 for i in all_issues if i["severity"] == "critical")
+    warn = sum(1 for i in all_issues if i["severity"] == "warning")
+    cur = wifi.get("current") or {}
+    conn = (f"已連線 {cur.get('ssid','—')}（{cur.get('band','')} {cur.get('rssi','')} dBm / "
+            f"SNR {cur.get('snr','')} dB）" if cur.get("connected") else "未偵測到 Wi-Fi 連線")
+    story.append(Paragraph("一、檢測摘要", H2))
+    story.append(Paragraph(
+        f"Wi-Fi：{conn}<br/>"
+        f"有線 LAN：盤點 {lan.get('alive_count', 0)} 台設備（網段 {lan.get('subnet','—')}）<br/>"
+        f"網路診斷：發現 <font color='#dc2626'>{crit} 個嚴重問題</font>、"
+        f"<font color='#ca8a04'>{warn} 個警告</font>", BODY))
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── Wi-Fi 現況 ──
+    story.append(Paragraph("二、Wi-Fi 現況", H2))
+    if cur.get("connected"):
+        story.append(_kv_table([
+            ["SSID", str(cur.get("ssid", "—"))],
+            ["頻段 / 頻道", f"{cur.get('band','')} ch{cur.get('channel','')}"],
+            ["訊號 / SNR", f"{cur.get('rssi','')} dBm / {cur.get('snr','')} dB"],
+            ["標準", str(cur.get("standard", "—"))],
+        ], FONT))
+    else:
+        story.append(Paragraph("未連線。", BODY))
+    nets = wifi.get("networks") or []
+    story.append(Paragraph(f"　鄰近偵測到 {len(nets)} 個 Wi-Fi 網路。", SMAL))
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── 有線 LAN 資產盤點 ──
+    story.append(Paragraph("三、有線 LAN 資產盤點", H2))
+    hosts = lan.get("hosts") or []
+    if hosts:
+        summ = "、".join(f"{t} {c}" for t, c in (lan.get("summary") or {}).items())
+        story.append(Paragraph(f"　網段 {lan.get('subnet','')}：{summ}", SMAL))
+        rows = [["IP", "MAC", "廠牌", "類型", "開放埠"]]
+        for h in hosts[:40]:
+            rows.append([h.get("ip", ""), h.get("mac", ""), (h.get("vendor") or "")[:18],
+                         h.get("type", ""),
+                         " ".join(str(p) for p in h.get("open_ports", [])[:6])])
+        story.append(_data_table(rows, FONT, BLUE, header=True))
+        if len(hosts) > 40:
+            story.append(Paragraph(f"　（僅列前 40 台，共 {len(hosts)} 台）", SMAL))
+    else:
+        story.append(Paragraph("尚無 LAN 盤查資料（可於「有線 LAN」分頁掃描）。", BODY))
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── 網路診斷 ──
+    story.append(Paragraph("四、網路診斷", H2))
+    steps = diag.get("steps") or [s for g in diag.get("groups", []) for s in g.get("steps", [])]
+    for s in steps:
+        ok = s.get("ok")
+        col = "#16a34a" if ok else "#dc2626"
+        tag = "通過" if ok else "異常"
+        story.append(Paragraph(f"<font color='{col}'>● [{tag}]</font> {s.get('name','')}："
+                               f"<font color='#64748b'>{s.get('detail','')}</font>", BODY))
+    story.append(Spacer(1, 0.3*cm))
+
+    # ── 流量監測（若有）──
+    if traffic.get("snapshot"):
+        snap = traffic["snapshot"]
+        story.append(Paragraph("五、流量監測", H2))
+        story.append(Paragraph(
+            f"　擷取 {snap.get('total_pkts',0)} 封包、{snap.get('pps',0)} pps、"
+            f"廣播占比 {snap.get('bcast_pct',0)}%、來源 {snap.get('sources',0)} 個", SMAL))
+
+    # ── 綜合建議 ──
+    sec = "六" if traffic.get("snapshot") else "五"
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph(f"{sec}、綜合建議", H2))
+    SEV = {"critical": ("【嚴重】", "#dc2626"), "warning": ("【警告】", "#ca8a04"),
+           "info": ("【建議】", "#2563eb")}
+    ranked = sorted(all_issues, key=lambda i: {"critical":0,"warning":1,"info":2}.get(i["severity"], 3))
+    if ranked:
+        for i in ranked:
+            lbl, col = SEV.get(i["severity"], ("", "#000"))
+            story.append(Paragraph(f"<font color='{col}'>{lbl}{i['title']}</font>", BODY))
+            story.append(Paragraph(f"　→ {i['recommendation']}", SMAL))
+            story.append(Spacer(1, 0.1*cm))
+    else:
+        story.append(Paragraph("✓ 各項檢測未發現需處理的問題。", BODY))
+
+    story += [Spacer(1, 0.6*cm), HRFlowable(width="100%", thickness=0.8, color=GRAY),
+              Paragraph(f"{company + ' · ' if company else ''}由 NetInspect Pro 產生 · "
+                        f"{datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                        st("Foot", 8, color=GRAY, align=TA_CENTER))]
+    doc.build(story)
+    buf.seek(0)
+    return buf.read()
+
+
 # ── Stability report ───────────────────────────────────────────────────────────
 def generate_stability_pdf(result: dict, chart_b64: str = "",
                            site_info: dict | None = None) -> bytes:
