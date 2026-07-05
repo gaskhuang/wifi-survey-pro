@@ -12,7 +12,7 @@ set -euo pipefail
 
 APP_NAME="NetInspect Pro"
 BUNDLE_ID="tw.zonetech.netinspect-pro"
-VERSION="3.0.0"
+VERSION="3.0.1"
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST_DIR="$SRC_DIR/dist"
