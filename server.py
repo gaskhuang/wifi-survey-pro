@@ -551,7 +551,10 @@ def api_settings_save():
             cloud.pop("token", None)
     except Exception:
         pass
-    appconfig.save(patch)
+    try:
+        appconfig.save(patch)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"設定寫入失敗：{e}"}), 500
     return jsonify({"ok": True, "settings": appconfig.public_view()})
 
 
@@ -597,10 +600,10 @@ def api_diag_run():
 @app.route("/api/diag/subnet", methods=["POST"])
 def api_diag_subnet():
     data = request.get_json(silent=True) or {}
-    cidr = (data.get("cidr") or "").strip()
+    cidr = str(data.get("cidr") or "").strip()
     try:
         return jsonify({"ok": True, "result": net_diag.subnet_calc(cidr)})
-    except ValueError as e:
+    except (ValueError, TypeError) as e:
         return jsonify({"ok": False, "error": f"輸入格式不正確（例：192.168.1.0/24）：{e}"}), 400
 
 
@@ -745,8 +748,8 @@ def api_lan_result():
 def api_lan_ping():
     data = request.get_json(silent=True) or {}
     ip = (data.get("ip") or "").strip()
-    if not lan_scanner.is_valid_ipv4(ip):
-        return jsonify({"ok": False, "error": "IP 格式不正確"}), 400
+    if not lan_scanner.is_private_ipv4(ip):
+        return jsonify({"ok": False, "error": "僅允許私有網段 IP（10/8、172.16/12、192.168/16）"}), 400
     try:
         count = max(1, min(10, int(data.get("count", 4))))
     except (ValueError, TypeError):
@@ -758,8 +761,8 @@ def api_lan_ping():
 def api_lan_portscan():
     data = request.get_json(silent=True) or {}
     ip = (data.get("ip") or "").strip()
-    if not lan_scanner.is_valid_ipv4(ip):
-        return jsonify({"ok": False, "error": "IP 格式不正確"}), 400
+    if not lan_scanner.is_private_ipv4(ip):
+        return jsonify({"ok": False, "error": "僅允許私有網段 IP（10/8、172.16/12、192.168/16）"}), 400
     return jsonify({"ok": True, "result": lan_scanner.portscan(ip)})
 
 

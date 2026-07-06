@@ -43,18 +43,26 @@ def dns_servers() -> list:
 
 
 def dns_resolve(name: str, timeout: float = 3.0) -> dict:
-    """解析域名，回傳 {ok, ip, ms}。"""
+    """解析域名，回傳 {ok, ip, ms}。
+    以 dnspython 的 per-resolver timeout 完成，避免改動行程全域 socket 逾時
+    （setdefaulttimeout 在多執行緒 Flask 下會互相干擾、非執行緒安全）。"""
     import time
-    old = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
     t0 = time.time()
     try:
-        ip = socket.gethostbyname(name)
+        import dns.resolver
+        r = dns.resolver.Resolver()
+        r.timeout = timeout
+        r.lifetime = timeout
+        ans = r.resolve(name, "A")
+        ip = ans[0].to_text()
         return {"ok": True, "ip": ip, "ms": round((time.time() - t0) * 1000)}
-    except Exception as e:
-        return {"ok": False, "ip": None, "ms": None, "error": str(e)}
-    finally:
-        socket.setdefaulttimeout(old)
+    except Exception:
+        # 後援：系統解析器（不觸碰全域 socket 逾時）
+        try:
+            ip = socket.gethostbyname(name)
+            return {"ok": True, "ip": ip, "ms": round((time.time() - t0) * 1000)}
+        except Exception as e:
+            return {"ok": False, "ip": None, "ms": None, "error": str(e)}
 
 
 def traceroute(host: str, max_hops: int = 15) -> dict:

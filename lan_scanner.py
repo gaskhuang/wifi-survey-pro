@@ -22,13 +22,22 @@ import itertools
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-MAX_HOSTS = 1024          # 單次掃描主機數上限
-MAX_ADDRS = 4096          # 拒絕超過此位址數的網段（避免誤掃/資源耗盡）
+MAX_HOSTS = 1024               # 單次掃描主機數上限
+MAX_ADDRS = MAX_HOSTS + 2      # 位址數上限＝可用主機上限＋網路/廣播位址，避免「接受卻靜默截斷」
 
 
 def is_valid_ipv4(s: str) -> bool:
     try:
         return isinstance(ipaddress.ip_address(s), ipaddress.IPv4Address)
+    except (ValueError, TypeError):
+        return False
+
+
+def is_private_ipv4(s: str) -> bool:
+    """合法 IPv4 且屬私網/loopback（限制掃描範圍在區網內，避免對外濫用）。"""
+    try:
+        a = ipaddress.ip_address(s)
+        return isinstance(a, ipaddress.IPv4Address) and (a.is_private or a.is_loopback)
     except (ValueError, TypeError):
         return False
 
@@ -394,12 +403,23 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
     if net.version != 4:
         raise ValueError("目前僅支援 IPv4 網段掃描")
     if net.num_addresses > MAX_ADDRS:
-        raise ValueError(f"網段過大（{net.num_addresses:,} 個位址）。"
-                         f"請改用 /20 以上（≤{MAX_ADDRS}）較小的網段。")
-    # 惰性取前 MAX_HOSTS 個，避免超大網段全量物化吃爆記憶體
+        raise ValueError(f"網段過大（{net.num_addresses:,} 個位址、{net.num_addresses - 2} 台主機）。"
+                         f"請改用 /22 以上（≤{MAX_HOSTS} 台）較小的網段，以免漏掃。")
+    # 惰性物化（此處已保證 ≤ MAX_HOSTS，不會發生靜默截斷）
     hosts_iter = list(itertools.islice(net.hosts(), MAX_HOSTS))
     total = len(hosts_iter)
     gateway = _default_gateway()
+
+    def _cancelled():
+        return bool(should_stop and should_stop())
+
+    def _partial(hosts):
+        summ = {}
+        for h in hosts:
+            summ[h["type"]] = summ.get(h["type"], 0) + 1
+        return {"subnet": str(net), "gateway": gateway, "hosts": hosts,
+                "summary": summ, "alive_count": len(hosts), "total": total,
+                "deep": deep, "cancelled": True}
     self_ip = _primary_ip()
     _ensure_oui()               # 並發查詢前先預熱 OUI 資料庫
 
@@ -429,6 +449,9 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
             if progress:
                 progress(done, total, None)
 
+    if _cancelled():                      # 已取消 → 不進入昂貴的埠掃描/指紋階段
+        return _partial([])
+
     # 2) 讀 ARP 表（包含未回 ICMP 但 L2 可達者；key 已在 _read_arp_table 驗證為合法 IPv4）
     arp = _read_arp_table()
     present = set(alive) | {ip for ip in arp if ipaddress.ip_address(ip) in net}
@@ -436,6 +459,9 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
     # 3) 對每台主機補齊指紋
     hosts = []
     plist = sorted(present, key=lambda x: tuple(int(o) for o in x.split(".")))
+
+    if _cancelled():
+        return _partial([])
 
     # 3a) 深度掃描：集中所有 (ip, port) 到單一扁平執行緒池，避免巢狀池造成執行緒爆量
     ports_by_ip = {ip: set() for ip in plist}

@@ -8,6 +8,7 @@ import io
 import os
 import base64
 from datetime import datetime
+from xml.sax.saxutils import escape as _xesc
 
 
 # ── Font discovery ─────────────────────────────────────────────────────────────
@@ -577,9 +578,10 @@ def _build_full_report(sections, site_info, branding):
     story = []
 
     # ── 封面 / 抬頭（白標）──
+    # 使用者可控文字須 XML 跳脫，避免 & < > 讓 ReportLab Paragraph 解析失敗
     company = branding.get("company") or ""
     if company:
-        story.append(Paragraph(company, CO))
+        story.append(Paragraph(_xesc(company), CO))
     story.append(Paragraph("網路現場檢測報告", H1))
     story.append(Paragraph("Network Site Inspection Report", st("sub", 10, color=GRAY, align=TA_CENTER, space_after=10)))
     story.append(HRFlowable(width="100%", thickness=2, color=BLUE))

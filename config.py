@@ -58,8 +58,11 @@ def _config_path() -> str:
 def _deep_merge(base: dict, over: dict) -> dict:
     out = dict(base)
     for k, v in (over or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _deep_merge(out[k], v)
+        if isinstance(out.get(k), dict):
+            # 既有為 dict 子樹：只接受 dict 深合併，拒絕純量/None 覆蓋（避免破壞結構）
+            if isinstance(v, dict):
+                out[k] = _deep_merge(out[k], v)
+            # 否則忽略此次覆蓋，保留原 dict
         else:
             out[k] = v
     return out
@@ -76,15 +79,11 @@ def load() -> dict:
 
 
 def save(patch: dict) -> dict:
-    """以 patch 深度合併後寫回，回傳新設定。"""
+    """以 patch 深度合併後寫回，回傳新設定。寫檔失敗會拋出例外（由呼叫端處理）。"""
     with _LOCK:
-        cur = load()
-        merged = _deep_merge(cur, patch or {})
-        try:
-            with open(_config_path(), "w", encoding="utf-8") as f:
-                json.dump(merged, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        merged = _deep_merge(load(), patch or {})
+        with open(_config_path(), "w", encoding="utf-8") as f:
+            json.dump(merged, f, ensure_ascii=False, indent=2)
         return merged
 
 
