@@ -126,7 +126,7 @@ const LAN = (() => {
   // ── 表格 ────────────────────────────────────────────────────────────────────
   function rowHTML(h) {
     const svc = (h.open_ports || []).length
-      ? (h.services || []).map((s, i) => `${h.open_ports[i]}${s ? "/" + esc(s) : ""}`).join("、")
+      ? (h.services || []).map((s, i) => `${esc(h.open_ports[i])}${s ? "/" + esc(s) : ""}`).join("、")
       : "—";
     const gw = h.is_gateway ? ' <span class="lan-gw-dot" title="預設閘道">⚑</span>' : "";
     return `
@@ -169,7 +169,7 @@ const LAN = (() => {
   function renderTypeBar(summary) {
     const entries = Object.entries(summary).sort((a, b) => b[1] - a[1]);
     $("lan-typebar").innerHTML = entries.map(([t, c]) =>
-      `<span class="chip">${esc(t)} <b>${c}</b></span>`).join("");
+      `<span class="chip">${esc(t)} <b>${esc(c)}</b></span>`).join("");
   }
 
   // ── 逐台工具：ping / 埠掃描 ──────────────────────────────────────────────────
@@ -185,12 +185,12 @@ const LAN = (() => {
       if (act === "ping") {
         const d = (await postJSON("/api/lan/ping", { ip })).result;
         detail.innerHTML = `<td colspan="7">Ping ${esc(ip)}：${
-          d.alive ? `✅ 平均 ${d.rtt_ms ?? "—"} ms（${d.recv}/${d.sent}，掉包 ${d.loss_pct}%）`
-                  : `❌ 無回應（掉包 ${d.loss_pct}%）`}</td>`;
+          d.alive ? `✅ 平均 ${esc(d.rtt_ms ?? "—")} ms（${esc(d.recv)}/${esc(d.sent)}，掉包 ${esc(d.loss_pct)}%）`
+                  : `❌ 無回應（掉包 ${esc(d.loss_pct)}%）`}</td>`;
       } else {
         const d = (await postJSON("/api/lan/portscan", { ip })).result;
-        const ports = (d.open_ports || []).map(p => `${p.port}${p.service ? "/" + esc(p.service) : ""}`).join("、");
-        detail.innerHTML = `<td colspan="7">埠掃描 ${esc(ip)}：${ports ? esc(ports) : "無開放埠"}</td>`;
+        const ports = (d.open_ports || []).map(p => `${esc(p.port)}${p.service ? "/" + esc(p.service) : ""}`).join("、");
+        detail.innerHTML = `<td colspan="7">埠掃描 ${esc(ip)}：${ports || "無開放埠"}</td>`;
       }
     } catch (e) {
       detail.innerHTML = `<td colspan="7" style="color:#f87171">失敗：${esc(e.message)}</td>`;

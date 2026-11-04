@@ -4,7 +4,7 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 (() => {
   const $ = id => document.getElementById(id);
-  const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
+  const esc = s => window.escHtml(s);   // 含引號轉義（value="..." 屬性需要）
   let _es = null, _ifaceLoaded = false;
 
   async function loadIface() {
@@ -25,12 +25,12 @@
     if (!talkers || !talkers.length) return;
     $("tf-tbody").innerHTML = talkers.map((t, i) => {
       const ba = (t.bcast || t.arp)
-        ? `${t.bcast ? "廣播" + t.bcast : ""}${t.bcast && t.arp ? " / " : ""}${t.arp ? "ARP" + t.arp : ""}` : "—";
+        ? `${t.bcast ? "廣播" + esc(t.bcast) : ""}${t.bcast && t.arp ? " / " : ""}${t.arp ? "ARP" + esc(t.arp) : ""}` : "—";
       const hot = t.share >= 50 ? ' style="color:#f87171;font-weight:700"' : "";
       return `<tr>
         <td>${i + 1}</td><td>${esc(t.mac)}</td><td>${esc(t.vendor || "未知")}</td>
-        <td>${esc(t.ip || "—")}</td><td>${t.pkts}</td><td>${t.pps}</td>
-        <td${hot}>${t.share}%</td><td class="svc">${ba}</td></tr>`;
+        <td>${esc(t.ip || "—")}</td><td>${esc(t.pkts)}</td><td>${esc(t.pps)}</td>
+        <td${hot}>${esc(t.share)}%</td><td class="svc">${ba}</td></tr>`;
     }).join("");
   }
 

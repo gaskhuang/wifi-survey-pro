@@ -15,10 +15,13 @@ config.py — 使用者設定儲存（NetInspect Pro）
 """
 import os
 import sys
+import copy
 import json
+import time
 import threading
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()     # save() 內會呼叫 load()，需可重入
+_CACHE = {"key": None, "data": None}   # 依 (mtime_ns, size) 快取解析結果
 
 _DEFAULT = {
     "ai": {
@@ -68,23 +71,70 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
-def load() -> dict:
-    """讀取完整設定（與預設合併，確保欄位齊全）。"""
+def _backup_corrupt(path: str):
+    """設定檔損毀時另存備份，避免之後的 save() 把唯一的資料蓋掉。"""
     try:
-        with open(_config_path(), encoding="utf-8") as f:
-            data = json.load(f)
-        return _deep_merge(_DEFAULT, data)
-    except Exception:
-        return json.loads(json.dumps(_DEFAULT))   # deep copy
+        os.replace(path, f"{path}.corrupt-{time.strftime('%Y%m%d_%H%M%S')}.bak")
+    except OSError:
+        pass
+
+
+def load() -> dict:
+    """讀取完整設定（與預設合併，確保欄位齊全）。依檔案 mtime/大小快取，避免每次 get() 都重讀解析。"""
+    path = _config_path()
+    with _LOCK:
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            return copy.deepcopy(_DEFAULT)
+        except OSError:
+            return copy.deepcopy(_DEFAULT)
+        key = (st.st_mtime_ns, st.st_size)
+        if _CACHE["key"] == key and _CACHE["data"] is not None:
+            return copy.deepcopy(_CACHE["data"])
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("設定檔內容不是物件")
+        except (ValueError, OSError):
+            # 損毀（JSON 解析失敗）：先備份原檔再以預設值繼續，資料不會被默默洗掉
+            _backup_corrupt(path)
+            _CACHE["key"], _CACHE["data"] = None, None
+            return copy.deepcopy(_DEFAULT)
+        merged = _deep_merge(_DEFAULT, data)
+        _CACHE["key"], _CACHE["data"] = key, merged
+        return copy.deepcopy(merged)
 
 
 def save(patch: dict) -> dict:
-    """以 patch 深度合併後寫回，回傳新設定。寫檔失敗會拋出例外（由呼叫端處理）。"""
+    """以 patch 深度合併後寫回，回傳新設定。
+    原子寫入：先寫暫存檔並 fsync，再 os.replace，讀取端永遠只看到完整的舊檔或新檔
+    （直接 open(path,"w") 會先清空檔案，斷電/崩潰就可能留下半個檔、金鑰全失）。
+    寫檔失敗會拋出例外（由呼叫端處理）。"""
     with _LOCK:
         merged = _deep_merge(load(), patch or {})
-        with open(_config_path(), "w", encoding="utf-8") as f:
-            json.dump(merged, f, ensure_ascii=False, indent=2)
-        return merged
+        path = _config_path()
+        tmp = path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # 含 API 金鑰，僅本人可讀
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(merged, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        _CACHE["key"], _CACHE["data"] = None, None      # 下次 load() 依新 mtime 重建快取
+        return copy.deepcopy(merged)
 
 
 def get(path: str, default=None):

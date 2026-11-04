@@ -5,8 +5,12 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 let stabChart  = null;
-let _stabPoll  = null;
+let _stabPoll  = null;    // 鏈式 setTimeout handle
 let _stabResult = null;
+let _stabRunId  = 0;      // 每次啟動遞增；舊輪詢回來發現 id 不同就丟棄
+let _stabFails  = 0;      // 連續失敗次數
+const STAB_POLL_MS   = 1000;
+const STAB_MAX_FAILS = 5;
 
 document.getElementById("btn-stab-start").addEventListener("click", startStability);
 document.getElementById("btn-stab-pdf").addEventListener("click", exportStabilityPdf);
@@ -16,12 +20,15 @@ async function startStability() {
   const duration = parseInt(document.getElementById("stab-duration").value) || 60;
   const status   = document.getElementById("stab-status");
 
-  const r = await fetch("/api/stability/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ duration }),
-  });
-  const d = await r.json();
+  let d;
+  try {
+    const r = await fetch("/api/stability/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ duration }),
+    });
+    d = await r.json();
+  } catch (e) { showStatus(status, `啟動失敗：${e.message}`, true); return; }
   if (!d.ok) { showStatus(status, d.error || "啟動失敗", true); return; }
 
   _stabResult = null;
@@ -33,36 +40,68 @@ async function startStability() {
   status.classList.add("hidden");
   initStabChart();
 
-  _stabPoll = setInterval(pollStability, 1000);
+  clearTimeout(_stabPoll);
+  _stabFails = 0;
+  const runId = ++_stabRunId;
+  _stabPoll = setTimeout(() => pollStability(runId), STAB_POLL_MS);
 }
 
-async function pollStability() {
+// 鏈式輪詢：一次只有一個 /status 在途，回來才排下一次；結束時 /result 只抓一次
+async function pollStability(runId) {
+  _stabPoll = null;
+  if (runId !== _stabRunId) return;
   let s;
   try {
-    s = await (await fetch("/api/stability/status")).json();
-  } catch (_) { return; }
-
-  // Progress
-  const pct = Math.min(100, (s.elapsed / s.duration) * 100);
-  document.getElementById("stab-progress-fill").style.width = pct + "%";
-  document.getElementById("stab-progress-label").textContent =
-    `${Math.round(s.elapsed)} s / ${s.duration} s`;
-
-  updateStabChart(s);
-  updateStabCards(s);
-
-  if (!s.running) {
-    clearInterval(_stabPoll);
-    _stabPoll = null;
-    if (s.has_result) {
-      const d = await (await fetch("/api/stability/result")).json();
-      if (d.ok) { _stabResult = d.result; renderStabReport(d.result); }
+    s = await fetchJSON("/api/stability/status", {}, 8000);
+    _stabFails = 0;
+  } catch (e) {
+    if (runId !== _stabRunId) return;
+    if (++_stabFails >= STAB_MAX_FAILS) {
+      finishStability(runId);
+      showStatus(document.getElementById("stab-status"),
+        `無法取得穩定度測試狀態（連續 ${_stabFails} 次失敗：${e.message || e}），已停止輪詢，請重試。`, true);
+      return;
     }
-    const btn = document.getElementById("btn-stab-start");
-    btn.disabled = false;
-    btn.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="8 12 10.5 14.5 16 9"/></svg> 一鍵分析穩定度`;
-    document.getElementById("stab-progress-wrap").classList.add("hidden");
+    _stabPoll = setTimeout(() => pollStability(runId), STAB_POLL_MS);
+    return;
   }
+  if (runId !== _stabRunId) return;
+
+  try {   // 單次渲染出錯不應中斷輪詢鏈
+    // Progress
+    const pct = Math.min(100, (s.elapsed / s.duration) * 100);
+    document.getElementById("stab-progress-fill").style.width = pct + "%";
+    document.getElementById("stab-progress-label").textContent =
+      `${Math.round(s.elapsed)} s / ${s.duration} s`;
+
+    updateStabChart(s);
+    updateStabCards(s);
+  } catch (_) {}
+
+  if (s.running) {
+    _stabPoll = setTimeout(() => pollStability(runId), STAB_POLL_MS);
+    return;
+  }
+  _stabRunId++;                                 // 本輪結束：之後任何回來的舊回應都失效
+  if (s.has_result) {
+    try {
+      const d = await fetchJSON("/api/stability/result", {}, 15000);
+      if (d.ok) { _stabResult = d.result; renderStabReport(d.result); }
+    } catch (e) {
+      showStatus(document.getElementById("stab-status"), `讀取分析結果失敗：${e.message}`, true);
+    }
+  }
+  finishStability();
+}
+
+function finishStability(runId) {
+  if (runId != null && runId === _stabRunId) _stabRunId++;
+  clearTimeout(_stabPoll);
+  _stabPoll = null;
+  const btn = document.getElementById("btn-stab-start");
+  btn.disabled = false;
+  btn.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="8 12 10.5 14.5 16 9"/></svg> 一鍵分析穩定度`;
+  document.getElementById("stab-progress-wrap").classList.add("hidden");
 }
 
 // ── Live cards ────────────────────────────────────────────────────────────────
@@ -71,8 +110,8 @@ function updateStabCards(s) {
   const set  = (id, v) => { document.getElementById(id).innerHTML = v; };
 
   if (last && last.connected) {
-    set("stab-rssi", `${last.rssi} <span style="font-size:11px;color:var(--text-2)">dBm</span>`);
-    set("stab-snr",  `${last.snr} <span style="font-size:11px;color:var(--text-2)">dB</span>`);
+    set("stab-rssi", `${escHtml(last.rssi)} <span style="font-size:11px;color:var(--text-2)">dBm</span>`);
+    set("stab-snr",  `${escHtml(last.snr)} <span style="font-size:11px;color:var(--text-2)">dB</span>`);
   } else if (last) {
     set("stab-rssi", `<span style="color:#ef4444">斷線</span>`);
     set("stab-snr", "—");
@@ -170,10 +209,10 @@ function renderStabReport(r) {
   const gw = r.ping_gw, inet = r.ping_inet;
   document.getElementById("stab-summary").innerHTML =
     `<strong style="color:var(--text-1)">穩定度摘要 — ${escHtml(r.ssid)}</strong><br>
-     RSSI 平均 ${r.rssi.mean ?? "—"} dBm（波動 ±${r.rssi.std ?? "—"} dB）｜ SNR 平均 ${r.snr.mean ?? "—"} dB<br>
-     ${gw && gw.sent ? `閘道器 Ping ${gw.avg_ms} ms（抖動 ${gw.jitter_ms ?? "—"} ms、掉包 ${gw.loss_pct ?? 0}%）` : "未測得閘道器"}<br>
-     ${inet && inet.sent ? `外部 Ping ${inet.avg_ms} ms（抖動 ${inet.jitter_ms ?? "—"} ms、掉包 ${inet.loss_pct ?? 0}%）` : ""}<br>
-     漫遊 ${r.roam_count} 次 ｜ 斷線 ${r.disconnect_count} 次 ｜ 取樣 ${r.sample_count} 點 / ${r.duration} 秒`;
+     RSSI 平均 ${escHtml(r.rssi.mean ?? "—")} dBm（波動 ±${escHtml(r.rssi.std ?? "—")} dB）｜ SNR 平均 ${escHtml(r.snr.mean ?? "—")} dB<br>
+     ${gw && gw.sent ? `閘道器 Ping ${escHtml(gw.avg_ms)} ms（抖動 ${escHtml(gw.jitter_ms ?? "—")} ms、掉包 ${escHtml(gw.loss_pct ?? 0)}%）` : "未測得閘道器"}<br>
+     ${inet && inet.sent ? `外部 Ping ${escHtml(inet.avg_ms)} ms（抖動 ${escHtml(inet.jitter_ms ?? "—")} ms、掉包 ${escHtml(inet.loss_pct ?? 0)}%）` : ""}<br>
+     漫遊 ${escHtml(r.roam_count)} 次 ｜ 斷線 ${escHtml(r.disconnect_count)} 次 ｜ 取樣 ${escHtml(r.sample_count)} 點 / ${escHtml(r.duration)} 秒`;
 
   // Findings（重用完整診斷的樣式）
   const sevOrder  = ["critical", "warning", "info", "good"];
@@ -187,8 +226,8 @@ function renderStabReport(r) {
     if (!group.length) continue;
     html += `<div class="diag-section-title">${sevLabels[sev]}（${group.length}）</div>`;
     html += group.map(f => `
-      <div class="diag-issue ${f.severity}">
-        <div class="diag-issue-icon">${f.icon || "•"}</div>
+      <div class="diag-issue ${escHtml(f.severity)}">
+        <div class="diag-issue-icon">${escHtml(f.icon || "•")}</div>
         <div class="diag-issue-body">
           <div class="diag-issue-title">${escHtml(f.title)}</div>
           ${f.detail ? `<div class="diag-issue-problem">${escHtml(f.detail)}</div>` : ""}

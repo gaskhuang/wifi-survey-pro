@@ -6,6 +6,17 @@
 let monChart = null;
 let _sse     = null;
 let _monSamples = [];   // 監控期間樣本，用於停止後產生穩定度優化建議
+let _monLastTs  = 0;    // 已畫過的最後時間戳：EventSource 自動重連時伺服器會重播歷史，靠它去重
+const MAX_SAMPLES = 3600; // 建議用樣本上限（每 2 秒一點 ≈ 2 小時），避免長時監控無限成長
+const MON_MAX_ERRS = 5;   // 連續斷線（期間沒收到任何新點）達此次數就放棄重連
+let _monErrs = 0;
+
+function setMonStatus(msg, isError = false) {
+  const el = document.getElementById("mon-status");
+  if (!el) return;
+  if (!msg) { el.classList.add("hidden"); el.textContent = ""; return; }
+  showStatus(el, msg, isError);
+}
 
 document.getElementById("btn-mon-start").addEventListener("click", startMonitor);
 document.getElementById("btn-mon-stop").addEventListener("click",  stopMonitor);
@@ -17,6 +28,7 @@ async function startMonitor() {
   clearMonCards();
   initMonChart();
   _monSamples = [];
+  _monLastTs  = 0;
   document.getElementById("mon-reco").hidden = true;
 
   await fetch("/api/monitor/start", {
@@ -26,12 +38,34 @@ async function startMonitor() {
   });
 
   if (_sse) { _sse.close(); _sse = null; }
-  _sse = new EventSource("/api/monitor/stream");
-  _sse.onmessage = e => {
+  _monErrs = 0;
+  setMonStatus("");
+  const es = new EventSource("/api/monitor/stream");
+  _sse = es;
+  es.onopen = () => {
+    if (_sse === es && _monErrs) setMonStatus("已重新連線，等待新資料…");
+  };
+  // EventSource 斷線後會自動重連（伺服器重播歷史，onmessage 以 ts 去重）；
+  // 這裡只負責顯示狀態，並在連續失敗、一直沒有新點時停止重連
+  es.onerror = () => {
+    if (_sse !== es) return;
+    _monErrs++;
+    if (es.readyState === EventSource.CLOSED || _monErrs >= MON_MAX_ERRS) {
+      es.close(); _sse = null;
+      setMonStatus("監控串流已中斷（伺服器無回應或監控已停止），請按「開始」重新監控。", true);
+    } else {
+      setMonStatus(`監控串流中斷，重新連線中…（第 ${_monErrs} 次）`, true);
+    }
+  };
+  es.onmessage = e => {
     try {
       const pt = JSON.parse(e.data);
+      if (pt.ts && pt.ts <= _monLastTs) return;   // 重連重播的舊點，略過
+      if (pt.ts) _monLastTs = pt.ts;
+      if (_monErrs) { _monErrs = 0; setMonStatus(""); }   // 收到新點 = 串流恢復
       if (!pt.connected) return;
       _monSamples.push({ rssi: pt.rssi, snr: pt.snr });
+      if (_monSamples.length > MAX_SAMPLES) _monSamples.shift();
       updateMonChart(pt);
       updateMonCards(pt);
     } catch (_) {}
@@ -40,6 +74,7 @@ async function startMonitor() {
 
 async function stopMonitor() {
   if (_sse) { _sse.close(); _sse = null; }
+  setMonStatus("");
   await fetch("/api/monitor/stop", { method: "POST" });
 
   // 停止監控 → 依整段期間的 RSSI/SNR 穩定度產生優化建議方案
@@ -52,8 +87,25 @@ function initMonChart() {
   const ctx = document.getElementById("mon-chart").getContext("2d");
   if (monChart) { monChart.destroy(); monChart = null; }
 
+  // Threshold plugin
+  const plugin = {
+    id: "monThresh",
+    afterDraw(chart) {
+      const {ctx: c, scales: {y}} = chart;
+      if (!y) return;
+      [[-65,"數據 -65","rgba(34,197,94,.45)"], [-67,"語音 -67","rgba(234,179,8,.45)"], [-70,"死角 -70","rgba(239,68,68,.45)"]].forEach(([v,l,col]) => {
+        const yp = y.getPixelForValue(v);
+        c.save(); c.strokeStyle = col; c.lineWidth = 1; c.setLineDash([2,4]);
+        c.beginPath(); c.moveTo(chart.chartArea.left, yp); c.lineTo(chart.chartArea.right, yp); c.stroke();
+        c.fillStyle = col.replace(".45",".8"); c.font = "8px -apple-system";
+        c.fillText(l, chart.chartArea.left+4, yp-2); c.restore();
+      });
+    }
+  };
+
   monChart = new Chart(ctx, {
     type: "line",
+    plugins: [plugin],   // 只套用在監控圖；全域 register 會讓其他圖（無 y 軸）在 afterDraw 丟例外
     data: {
       labels: [],
       datasets: [
@@ -111,21 +163,6 @@ function initMonChart() {
     }
   });
 
-  // Threshold plugin
-  const plugin = {
-    id: "monThresh",
-    afterDraw(chart) {
-      const {ctx: c, scales: {y}} = chart;
-      [[-65,"數據 -65","rgba(34,197,94,.45)"], [-67,"語音 -67","rgba(234,179,8,.45)"], [-70,"死角 -70","rgba(239,68,68,.45)"]].forEach(([v,l,col]) => {
-        const yp = y.getPixelForValue(v);
-        c.save(); c.strokeStyle = col; c.lineWidth = 1; c.setLineDash([2,4]);
-        c.beginPath(); c.moveTo(chart.chartArea.left, yp); c.lineTo(chart.chartArea.right, yp); c.stroke();
-        c.fillStyle = col.replace(".45",".8"); c.font = "8px -apple-system";
-        c.fillText(l, chart.chartArea.left+4, yp-2); c.restore();
-      });
-    }
-  };
-  Chart.register(plugin);
   monChart.update();
 }
 

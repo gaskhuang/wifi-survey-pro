@@ -59,6 +59,8 @@ async function doScan() {
   setLoading(btn, true);
   showStatus(status, "Scanning for Wi-Fi networks…");
 
+  // 目前連線與掃描並行取得（原本掃完才序列等 /api/current）；失敗退回輪詢快取
+  const connP = getCurrentConn(3000).catch(() => APP.current || {});
   try {
     const r = await fetch("/api/scan");
     const d = await r.json();
@@ -67,7 +69,7 @@ async function doScan() {
     APP.networks = d.networks;
 
     // Update current BSSID from connection badge
-    const conn = await (await fetch("/api/current")).json();
+    const conn = (await connP) || {};
     _currentBssid = conn.bssid || "";
 
     rerender();
@@ -137,29 +139,29 @@ function renderNetTable(nets) {
       ? `<span style="font-size:10px">${escHtml(n.vendor)}</span>`
       : `<span style="color:var(--text-3);font-size:10px">—</span>`;
     const maxRate = n.max_rate != null
-      ? `<span style="color:var(--text-2)">${n.max_rate} Mbps</span>`
+      ? `<span style="color:var(--text-2)">${escHtml(n.max_rate)} Mbps</span>`
       : "—";
     const gen = n.gen >= 4
-      ? `<span class="gen-badge" style="color:${_genColor(n.gen)}">${n.gen}</span>`
+      ? `<span class="gen-badge" style="color:${_genColor(n.gen)}">${escHtml(n.gen)}</span>`
       : "—";
     const secHtml = `<span style="font-size:10px;color:var(--text-2)">${escHtml(n.security||"")}</span>`;
-    const seenHtml = `<span style="font-size:10px">${n.seen_ago||"—"}</span>`;
-    const bssidDisp = n.bssid.startsWith("<") ? `<span style="color:var(--text-3);font-size:9px">${escHtml(n.bssid)}</span>` : escHtml(n.bssid);
+    const seenHtml = `<span style="font-size:10px">${escHtml(n.seen_ago||"—")}</span>`;
+    const bssidDisp = String(n.bssid ?? "").startsWith("<") ? `<span style="color:var(--text-3);font-size:9px">${escHtml(n.bssid)}</span>` : escHtml(n.bssid);
 
     return `<tr class="net-row${isConn?" connected":""}" data-bssid="${escHtml(n.bssid)}" data-idx="${n._idx}">
-      <td class="col-bar-cell"><div class="col-bar-inner" style="background:${n.net_color}"></div></td>
+      <td class="col-bar-cell"><div class="col-bar-inner" style="background:${escHtml(n.net_color)}"></div></td>
       <td>${bssidDisp}</td>
       <td>${ssidHtml}</td>
       <td>${vendorHtml}</td>
       <td>
         <div class="we-signal">
-          <span class="we-signal-pct" style="color:${sigColor}">${pct}%</span>
-          <div class="we-signal-bar"><div class="we-signal-fill" style="width:${pct}%;background:${sigColor}"></div></div>
+          <span class="we-signal-pct" style="color:${sigColor}">${escHtml(pct)}%</span>
+          <div class="we-signal-bar"><div class="we-signal-fill" style="width:${Number(pct) || 0}%;background:${sigColor}"></div></div>
         </div>
       </td>
-      <td style="text-align:center;font-weight:600">${n.channel}</td>
-      <td style="color:var(--text-2)">${n.width} MHz</td>
-      <td style="color:var(--text-2)">${n.band}</td>
+      <td style="text-align:center;font-weight:600">${escHtml(n.channel)}</td>
+      <td style="color:var(--text-2)">${escHtml(n.width)} MHz</td>
+      <td style="color:var(--text-2)">${escHtml(n.band)}</td>
       <td style="font-family:monospace;font-size:10px;color:var(--text-2)">${escHtml(n.mode||"")}</td>
       <td style="text-align:center">${gen}</td>
       <td>${secHtml}</td>

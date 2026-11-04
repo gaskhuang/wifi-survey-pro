@@ -7,8 +7,11 @@ NetInspect Pro — PDF report generator v3.0
 import io
 import os
 import base64
+import threading
 from datetime import datetime
 from xml.sax.saxutils import escape as _xesc
+
+import recommender as _rc   # 共用 RSSI 門檻常數
 
 
 # ── Font discovery ─────────────────────────────────────────────────────────────
@@ -25,19 +28,89 @@ def _find_cjk_font():
     return None
 
 
+# 字型只解析一次（STHeiti .ttc 約 56 MB，每次解析 ~160 ms / ~72 MB 暫存）
+_FONT_LOCK = threading.Lock()
+_FONT_NAME = None      # 已註冊的字型名稱（"CJK" 或 "Helvetica"）
+_FONT_CMAP = None      # CJK 字型的 codepoint → glyph 表，用來判斷缺字
+
+
 def _register_fonts():
-    """Register CJK font with ReportLab. Returns font name to use."""
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    font_path = _find_cjk_font()
-    if font_path:
-        try:
-            pdfmetrics.registerFont(TTFont("CJK", font_path, subfontIndex=0))
-            pdfmetrics.registerFont(TTFont("CJK-Bold", font_path, subfontIndex=0))
-            return "CJK"
-        except Exception:
-            pass
-    return "Helvetica"
+    """Register CJK font with ReportLab (once per process). Returns font name to use."""
+    global _FONT_NAME, _FONT_CMAP
+    if _FONT_NAME is not None:
+        return _FONT_NAME
+    with _FONT_LOCK:
+        if _FONT_NAME is not None:
+            return _FONT_NAME
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.lib.fonts import addMapping
+        name = "Helvetica"
+        for path in _CJK_CANDIDATES:
+            if not os.path.exists(path):
+                continue
+            try:
+                f = TTFont("CJK", path, subfontIndex=0)
+                pdfmetrics.registerFont(f)
+                # 粗體/斜體都對應同一字面（原本 CJK-Bold 也是同一個 subfont）
+                for bold in (0, 1):
+                    for italic in (0, 1):
+                        addMapping("CJK", bold, italic, "CJK")
+                _FONT_CMAP = f.face.charToGlyph
+                name = "CJK"
+                break
+            except Exception:
+                continue
+        _FONT_NAME = name
+        return name
+
+
+# ── PDF 文字處理 ───────────────────────────────────────────────────────────────
+# STHeiti 缺 emoji 與部分符號（🔴🟡🟢🚨✓▸…），PDF 中會變空白或方框 → 換成有字形的字元
+_GLYPH_MAP = {
+    "✓": "√", "✔": "√", "✅": "√", "☑": "√",
+    "✗": "×", "✘": "×", "❌": "×", "❎": "×",
+    "▸": "▶", "►": "▶", "▹": "▶", "▷": "▶",
+    "🔴": "●", "🟠": "●", "🟡": "●", "🟢": "●", "🔵": "●", "🟣": "●",
+    "⚪": "○", "⚫": "●", "🚨": "●",
+    "⚠": "△", "〰": "～", "〜": "～",
+}
+
+
+def _glyph(s: str) -> str:
+    """PDF 專用：替換字型缺字的符號，其餘缺字（emoji、變體選擇符）直接移除。"""
+    out = []
+    cmap = _FONT_CMAP
+    for c in s:
+        r = _GLYPH_MAP.get(c)
+        if r is not None:
+            out.append(r)
+        elif c < "\x80" or cmap is None or ord(c) in cmap:
+            out.append(c)
+        # 其他缺字略過（否則印成空白/方框）
+    return "".join(out)
+
+
+def _t(v) -> str:
+    """Paragraph() 內插值：XML 跳脫（防 & < > 解析錯誤、<img> 外連）＋缺字替換。"""
+    return _glyph(_xesc("" if v is None else str(v)))
+
+
+def _p(v) -> str:
+    """表格儲存格（純文字、不解析標記）：只做缺字替換，不跳脫。"""
+    return _glyph("" if v is None else str(v))
+
+
+def _dot(color: str) -> str:
+    """彩色圓點（取代 🔴🟡🟢 等 emoji）；color 為程式內固定色碼。"""
+    return f'<font color="{color}">●</font>'
+
+
+def _int(v, default=0) -> int:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -157,7 +230,7 @@ def _build_pdf(site_info, networks, analysis, measurements,
             img = RLImage(img_buf, width=16*cm, height=6*cm)
             story += [img, Spacer(1, 0.5*cm)]
         except Exception as e:
-            story.append(Paragraph(f"（頻譜圖載入失敗：{e}）", SMAL))
+            story.append(Paragraph(f"（頻譜圖載入失敗：{_t(e)}）", SMAL))
     else:
         story.append(Paragraph("二、頻道頻譜圖", H2))
         story.append(Paragraph("（產生報告時未提供頻譜截圖）", SMAL))
@@ -171,19 +244,19 @@ def _build_pdf(site_info, networks, analysis, measurements,
     net_header = ["#", "SSID", "頻道", "頻段", "頻寬\n(MHz)", "RSSI\n(dBm)", "SNR\n(dB)", "安全", "評級"]
     net_rows = [net_header]
     for i, n in enumerate(networks, 1):
-        ssid = n.get("ssid", "—")
+        ssid = str(n.get("ssid") or "—")
         if ssid.startswith("<"):
             ssid = "(隱藏)"
         net_rows.append([
             str(i),
             ssid[:22],
             str(n.get("channel", "")),
-            n.get("band", ""),
-            str(n.get("width", "")),
+            str(n.get("band") or ""),
+            str(n.get("width") or ""),
             str(n.get("rssi", "")),
             str(n.get("snr", "")),
-            n.get("security", "")[:10],
-            n.get("quality_label", ""),
+            str(n.get("security") or "")[:10],
+            str(n.get("quality_label") or ""),
         ])
     net_tbl = Table(net_rows,
         colWidths=[0.8*cm, 4.2*cm, 1.2*cm, 1.6*cm, 1.4*cm, 1.4*cm, 1.2*cm, 2.2*cm, 1.4*cm])
@@ -206,7 +279,7 @@ def _build_pdf(site_info, networks, analysis, measurements,
         best = band_data.get("best_channels", [])
         if not best and not band_data:
             continue
-        story.append(Paragraph(f"▸ {band}", H3))
+        story.append(Paragraph(f"▶ {_t(band)}", H3))
         story.append(Paragraph(BAND_DESC.get(band, ""), BODY))
 
         ch_header = ["建議頻道", "壅塞分數", "佔用 AP 數", "說明"]
@@ -229,8 +302,9 @@ def _build_pdf(site_info, networks, analysis, measurements,
         story += [
             Paragraph("五、訊號熱力圖（Signal Heatmap）", H2),
             Paragraph(
-                "熱力圖以色彩呈現各量測點的訊號強度分布。綠色 ≥ -65 dBm（優），"
-                "黃色 -65～-72 dBm（尚可），紅色 < -72 dBm（弱，建議補設 AP）。",
+                f"熱力圖以色彩呈現各量測點的訊號強度分布。綠色 ≥ {_rc.DATA_RSSI} dBm（優），"
+                f"黃色 {_rc.DATA_RSSI}～{_rc.DEAD_ZONE_RSSI} dBm（尚可），"
+                f"紅色 &lt; {_rc.DEAD_ZONE_RSSI} dBm（死角，建議補設 AP）。",
                 BODY),
             Spacer(1, 0.3*cm),
         ]
@@ -240,7 +314,7 @@ def _build_pdf(site_info, networks, analysis, measurements,
             img = RLImage(img_buf, width=14*cm, height=9*cm)
             story += [img, Spacer(1, 0.5*cm)]
         except Exception as e:
-            story.append(Paragraph(f"（熱力圖載入失敗：{e}）", SMAL))
+            story.append(Paragraph(f"（熱力圖載入失敗：{_t(e)}）", SMAL))
 
     # ╔══════════════════════════════════════╗
     # ║  7. COVERAGE MEASUREMENTS            ║
@@ -280,10 +354,17 @@ def _build_pdf(site_info, networks, analysis, measurements,
             "low":    colors.HexColor("#f0fdf4"),
         }
 
+        # analyzer._build_recommendations 輸出 level（warning/info/success），無 priority
+        LEVEL_PRIORITY = {"critical": "high", "warning": "high",
+                          "info": "medium", "success": "low", "good": "low"}
+        BADGE = {"high":   _dot("#dc2626") + " 高優先",
+                 "medium": _dot("#ca8a04") + " 中優先",
+                 "low":    _dot("#16a34a") + " 低優先"}
+
         for i, r in enumerate(recs, 1):
-            priority = r.get("priority", "medium")
+            priority = r.get("priority") or LEVEL_PRIORITY.get(r.get("level"), "medium")
             bg = PRIORITY_COLOR.get(priority, colors.white)
-            badge = {"high": "🔴 高優先", "medium": "🟡 中優先", "low": "🟢 低優先"}.get(priority, "")
+            badge = BADGE.get(priority, "")
 
             rec_block = [
                 [f"建議 {i}：{r.get('action', '')}",
@@ -303,6 +384,8 @@ def _build_pdf(site_info, networks, analysis, measurements,
             detail_rows = []
             if r.get("band"):
                 detail_rows.append(["頻段", r["band"]])
+            if r.get("value") not in (None, ""):
+                detail_rows.append(["建議值", str(r["value"])])
             if r.get("detail"):
                 detail_rows.append(["說明", r["detail"]])
             if r.get("current_channel"):
@@ -330,10 +413,11 @@ def _build_pdf(site_info, networks, analysis, measurements,
 
     ref_rows = [
         ["指標",               "目標值",         "說明"],
-        ["資料區 RSSI",         "≥ -65 dBm",      "一般上網、辦公用途最低要求"],
-        ["語音 / 視訊 RSSI",   "≥ -67 dBm",      "VoIP、Teams、Zoom 等即時通訊"],
-        ["漫遊觸發區間",        "-67 ～ -72 dBm", "AP 間訊號重疊，觸發 802.11r 快速漫遊"],
-        ["死角判定門檻",        "< -70 dBm",      "低於此值需補設 AP 或調整天線方向"],
+        ["資料區 RSSI",         f"≥ {_rc.DATA_RSSI} dBm",  "一般上網、辦公用途最低要求"],
+        ["語音 / 視訊 RSSI",   f"≥ {_rc.VOICE_RSSI} dBm", "VoIP、Teams、Zoom 等即時通訊"],
+        ["漫遊觸發區間",        f"{_rc.VOICE_RSSI} ～ {_rc.DEAD_ZONE_RSSI} dBm",
+         "AP 間訊號重疊，觸發 802.11r 快速漫遊"],
+        ["死角判定門檻",        f"< {_rc.DEAD_ZONE_RSSI} dBm", "低於此值需補設 AP 或調整天線方向"],
         ["SNR（訊噪比）",       "≥ 25 dB",        "低於 20 dB 連線品質明顯下降，< 10 dB 斷線"],
         ["2.4G 非重疊頻道",    "1 / 6 / 11",     "全球標準三頻道，避免使用 2~5、7~10"],
         ["5G 高密度頻寬",       "20 / 40 MHz",    "降低同頻干擾；低密度環境可用 80 MHz"],
@@ -391,7 +475,8 @@ def _build_diagnosis_pdf(data, site_info):
     GRAY  = colors.HexColor("#64748b")
 
     def st(name, size, color=colors.black, align=TA_LEFT, space_after=4, bold=False):
-        return ParagraphStyle(name, fontName=("CJK-Bold" if bold and FONT == "CJK" else FONT),
+        # bold 參數保留相容；CJK 粗體與一般為同一字面
+        return ParagraphStyle(name, fontName=FONT,
                               fontSize=size, textColor=color, alignment=align,
                               spaceAfter=space_after, leading=size*1.4)
 
@@ -412,7 +497,8 @@ def _build_diagnosis_pdf(data, site_info):
     score = ai.get("score")
     if score is None:
         score = stab.get("score", 0)
-    glabel, gcolor, gemoji = _health_grade(int(score or 0))
+    score = _int(score)
+    glabel, gcolor, gemoji = _health_grade(score)
     gcol = colors.HexColor(gcolor)
     BIG  = st("Big", 30, color=gcol, align=TA_CENTER, space_after=2, bold=True)
     GLAB = st("Glab", 13, color=gcol, align=TA_CENTER, space_after=12)
@@ -445,11 +531,11 @@ def _build_diagnosis_pdf(data, site_info):
     # ── 二、健康總評 ──
     story += [
         Paragraph("二、健康總評", H2),
-        Paragraph(f"{int(score or 0)} / 100", BIG),
-        Paragraph(f"{gemoji} {glabel}", GLAB),
+        Paragraph(f"{score} / 100", BIG),
+        Paragraph(f"● {_t(glabel)}", GLAB),   # emoji 字型無字形，改用同色圓點
     ]
     if ai.get("summary"):
-        story += [Paragraph(str(ai["summary"]), BODY), Spacer(1, 0.3*cm)]
+        story += [Paragraph(_t(ai["summary"]), BODY), Spacer(1, 0.3*cm)]
 
     # ── 三、量測摘要 ──
     def fmt(v, unit=""):
@@ -484,7 +570,7 @@ def _build_diagnosis_pdf(data, site_info):
         story.append(_data_table(ch_rows, FONT, BLUE, header=True))
         coi = (ana.get("summary") or {}).get("co_channel_hotspots")
         if coi:
-            story.append(Paragraph(f"　偵測到 {coi} 個同頻干擾熱區，建議重新規劃 AP 頻道分配。", SMAL))
+            story.append(Paragraph(f"　偵測到 {_t(coi)} 個同頻干擾熱區，建議重新規劃 AP 頻道分配。", SMAL))
     else:
         story.append(Paragraph("（無頻道分析資料）", SMAL))
     story.append(Spacer(1, 0.5*cm))
@@ -496,7 +582,7 @@ def _build_diagnosis_pdf(data, site_info):
         ("adjust",    "【建議調整】", "#ca8a04"),
         ("ok",        "【狀態正常】", "#16a34a"),
     ]
-    items = ai.get("items") or []
+    items = [i for i in (ai.get("items") or []) if isinstance(i, dict)]
     if items:
         for key, label, color in PRIO:
             group = [i for i in items if i.get("priority") == key]
@@ -504,10 +590,10 @@ def _build_diagnosis_pdf(data, site_info):
                 continue
             story.append(Paragraph(f'<font color="{color}"><b>{label}（{len(group)}）</b></font>', BODY))
             for i in group:
-                cat = f'（{i.get("category")}）' if i.get("category") else ""
-                story.append(Paragraph(f'<font color="{color}">• {i.get("problem","")}{cat}</font>', BODY))
+                cat = f'（{_t(i.get("category"))}）' if i.get("category") else ""
+                story.append(Paragraph(f'<font color="{color}">• {_t(i.get("problem"))}{cat}</font>', BODY))
                 if i.get("action"):
-                    story.append(Paragraph(f'　→ {i["action"]}', SMAL))
+                    story.append(Paragraph(f'　→ {_t(i["action"])}', SMAL))
                 story.append(Spacer(1, 0.12*cm))
             story.append(Spacer(1, 0.15*cm))
     else:
@@ -517,7 +603,7 @@ def _build_diagnosis_pdf(data, site_info):
         Spacer(1, 0.6*cm),
         HRFlowable(width="100%", thickness=0.8, color=GRAY),
         Paragraph(f"由 NetInspect Pro 產生 · {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                  + (f" · {ai.get('provider','')} 分析" if ai.get("provider") else ""),
+                  + (f" · {_t(ai.get('provider'))} 分析" if ai.get("provider") else ""),
                   st("Foot", 8, color=GRAY, align=TA_CENTER)),
     ]
 
@@ -529,11 +615,11 @@ def _build_diagnosis_pdf(data, site_info):
 def _fallback_diagnosis_html(data) -> str:
     ai = data.get("ai") or {}
     rows = "\n".join(
-        f"<li>[{i.get('priority')}] {i.get('problem')} → {i.get('action')}</li>"
-        for i in (ai.get("items") or []))
+        f"<li>[{_xesc(str(i.get('priority')))}] {_xesc(str(i.get('problem')))} → {_xesc(str(i.get('action')))}</li>"
+        for i in (ai.get("items") or []) if isinstance(i, dict))
     return f"""<html><meta charset="utf-8"><body>
 <h1>Wi-Fi 現場診斷報告</h1>
-<p>健康分數: {ai.get('score','—')}/100</p><ul>{rows}</ul></body></html>"""
+<p>健康分數: {_xesc(str(ai.get('score','—')))}/100</p><ul>{rows}</ul></body></html>"""
 
 
 # ── 整合檢測報告（Wi-Fi + LAN + 診斷 + 流量），支援白標 ──────────────────────────
@@ -565,7 +651,8 @@ def _build_full_report(sections, site_info, branding):
     GRAY  = colors.HexColor("#64748b")
 
     def st(name, size, color=colors.black, align=TA_LEFT, space_after=4, bold=False):
-        return ParagraphStyle(name, fontName=("CJK-Bold" if bold and FONT == "CJK" else FONT),
+        # bold 參數保留相容；CJK 粗體與一般為同一字面
+        return ParagraphStyle(name, fontName=FONT,
                               fontSize=size, textColor=color, alignment=align,
                               spaceAfter=space_after, leading=size*1.4)
 
@@ -579,9 +666,10 @@ def _build_full_report(sections, site_info, branding):
 
     # ── 封面 / 抬頭（白標）──
     # 使用者可控文字須 XML 跳脫，避免 & < > 讓 ReportLab Paragraph 解析失敗
-    company = branding.get("company") or ""
+    # company 保留原文（表格儲存格用），Paragraph 內一律經 _t()
+    company = str(branding.get("company") or "")
     if company:
-        story.append(Paragraph(_xesc(company), CO))
+        story.append(Paragraph(_t(company), CO))
     story.append(Paragraph("網路現場檢測報告", H1))
     story.append(Paragraph("Network Site Inspection Report", st("sub", 10, color=GRAY, align=TA_CENTER, space_after=10)))
     story.append(HRFlowable(width="100%", thickness=2, color=BLUE))
@@ -605,15 +693,15 @@ def _build_full_report(sections, site_info, branding):
     for src in (diag, traffic):
         all_issues += [i for i in src.get("issues", []) if i.get("severity") != "good"]
 
-    crit = sum(1 for i in all_issues if i["severity"] == "critical")
-    warn = sum(1 for i in all_issues if i["severity"] == "warning")
+    crit = sum(1 for i in all_issues if i.get("severity") == "critical")
+    warn = sum(1 for i in all_issues if i.get("severity") == "warning")
     cur = wifi.get("current") or {}
-    conn = (f"已連線 {cur.get('ssid','—')}（{cur.get('band','')} {cur.get('rssi','')} dBm / "
-            f"SNR {cur.get('snr','')} dB）" if cur.get("connected") else "未偵測到 Wi-Fi 連線")
+    conn = (f"已連線 {_t(cur.get('ssid','—'))}（{_t(cur.get('band',''))} {_t(cur.get('rssi',''))} dBm / "
+            f"SNR {_t(cur.get('snr',''))} dB）" if cur.get("connected") else "未偵測到 Wi-Fi 連線")
     story.append(Paragraph("一、檢測摘要", H2))
     story.append(Paragraph(
         f"Wi-Fi：{conn}<br/>"
-        f"有線 LAN：盤點 {lan.get('alive_count', 0)} 台設備（網段 {lan.get('subnet','—')}）<br/>"
+        f"有線 LAN：盤點 {_t(lan.get('alive_count', 0))} 台設備（網段 {_t(lan.get('subnet','—'))}）<br/>"
         f"網路診斷：發現 <font color='#dc2626'>{crit} 個嚴重問題</font>、"
         f"<font color='#ca8a04'>{warn} 個警告</font>", BODY))
     story.append(Spacer(1, 0.4*cm))
@@ -638,11 +726,11 @@ def _build_full_report(sections, site_info, branding):
     hosts = lan.get("hosts") or []
     if hosts:
         summ = "、".join(f"{t} {c}" for t, c in (lan.get("summary") or {}).items())
-        story.append(Paragraph(f"　網段 {lan.get('subnet','')}：{summ}", SMAL))
+        story.append(Paragraph(f"　網段 {_t(lan.get('subnet',''))}：{_t(summ)}", SMAL))
         rows = [["IP", "MAC", "廠牌", "類型", "開放埠"]]
         for h in hosts[:40]:
-            rows.append([h.get("ip", ""), h.get("mac", ""), (h.get("vendor") or "")[:18],
-                         h.get("type", ""),
+            rows.append([str(h.get("ip") or ""), str(h.get("mac") or ""),
+                         str(h.get("vendor") or "")[:18], str(h.get("type") or ""),
                          " ".join(str(p) for p in h.get("open_ports", [])[:6])])
         story.append(_data_table(rows, FONT, BLUE, header=True))
         if len(hosts) > 40:
@@ -658,8 +746,8 @@ def _build_full_report(sections, site_info, branding):
         ok = s.get("ok")
         col = "#16a34a" if ok else "#dc2626"
         tag = "通過" if ok else "異常"
-        story.append(Paragraph(f"<font color='{col}'>● [{tag}]</font> {s.get('name','')}："
-                               f"<font color='#64748b'>{s.get('detail','')}</font>", BODY))
+        story.append(Paragraph(f"<font color='{col}'>● [{tag}]</font> {_t(s.get('name',''))}："
+                               f"<font color='#64748b'>{_t(s.get('detail',''))}</font>", BODY))
     story.append(Spacer(1, 0.3*cm))
 
     # ── 流量監測（若有）──
@@ -667,8 +755,8 @@ def _build_full_report(sections, site_info, branding):
         snap = traffic["snapshot"]
         story.append(Paragraph("五、流量監測", H2))
         story.append(Paragraph(
-            f"　擷取 {snap.get('total_pkts',0)} 封包、{snap.get('pps',0)} pps、"
-            f"廣播占比 {snap.get('bcast_pct',0)}%、來源 {snap.get('sources',0)} 個", SMAL))
+            f"　擷取 {_t(snap.get('total_pkts',0))} 封包、{_t(snap.get('pps',0))} pps、"
+            f"廣播占比 {_t(snap.get('bcast_pct',0))}%、來源 {_t(snap.get('sources',0))} 個", SMAL))
 
     # ── 綜合建議 ──
     sec = "六" if traffic.get("snapshot") else "五"
@@ -676,18 +764,18 @@ def _build_full_report(sections, site_info, branding):
     story.append(Paragraph(f"{sec}、綜合建議", H2))
     SEV = {"critical": ("【嚴重】", "#dc2626"), "warning": ("【警告】", "#ca8a04"),
            "info": ("【建議】", "#2563eb")}
-    ranked = sorted(all_issues, key=lambda i: {"critical":0,"warning":1,"info":2}.get(i["severity"], 3))
+    ranked = sorted(all_issues, key=lambda i: {"critical":0,"warning":1,"info":2}.get(i.get("severity"), 3))
     if ranked:
         for i in ranked:
-            lbl, col = SEV.get(i["severity"], ("", "#000"))
-            story.append(Paragraph(f"<font color='{col}'>{lbl}{i['title']}</font>", BODY))
-            story.append(Paragraph(f"　→ {i['recommendation']}", SMAL))
+            lbl, col = SEV.get(i.get("severity"), ("", "#000"))
+            story.append(Paragraph(f"<font color='{col}'>{lbl}{_t(i.get('title'))}</font>", BODY))
+            story.append(Paragraph(f"　→ {_t(i.get('recommendation'))}", SMAL))
             story.append(Spacer(1, 0.1*cm))
     else:
-        story.append(Paragraph("✓ 各項檢測未發現需處理的問題。", BODY))
+        story.append(Paragraph(f"{_dot('#16a34a')} 各項檢測未發現需處理的問題。", BODY))
 
     story += [Spacer(1, 0.6*cm), HRFlowable(width="100%", thickness=0.8, color=GRAY),
-              Paragraph(f"{company + ' · ' if company else ''}由 NetInspect Pro 產生 · "
+              Paragraph(f"{_t(company) + ' · ' if company else ''}由 NetInspect Pro 產生 · "
                         f"{datetime.now().strftime('%Y-%m-%d %H:%M')}",
                         st("Foot", 8, color=GRAY, align=TA_CENTER))]
     doc.build(story)
@@ -739,9 +827,12 @@ def _build_stability_pdf(result, chart_b64, site_info):
     BODY = st("Body", 9, space_after=3)
     SMAL = st("Smal", 8, color=GRAY, space_after=2)
 
-    grade = result.get("grade", {})
+    grade = result.get("grade") or {}
     score = result.get("score", 0)
-    gcol  = colors.HexColor(grade.get("color", "#64748b"))
+    try:
+        gcol = colors.HexColor(grade.get("color") or "#64748b")
+    except Exception:
+        gcol = GRAY
     BIG   = st("Big", 26, color=gcol, align=TA_CENTER, space_after=2)
     GLAB  = st("Glab", 13, color=gcol, align=TA_CENTER, space_after=12)
 
@@ -770,8 +861,8 @@ def _build_stability_pdf(result, chart_b64, site_info):
     # ── 總評 ──
     story += [
         Paragraph("二、穩定度總評", H2),
-        Paragraph(f"{score} / 100", BIG),
-        Paragraph(f"{grade.get('emoji','')} {grade.get('label','—')}", GLAB),
+        Paragraph(f"{_t(score)} / 100", BIG),
+        Paragraph(f"● {_t(grade.get('label','—'))}", GLAB),   # emoji 無字形 → 同色圓點
     ]
 
     # ── 統計 ──
@@ -805,7 +896,7 @@ def _build_stability_pdf(result, chart_b64, site_info):
             story += [RLImage(img_buf, width=16*cm, height=7*cm),
                       Spacer(1, 0.5*cm)]
         except Exception as e:
-            story.append(Paragraph(f"（圖表載入失敗：{e}）", SMAL))
+            story.append(Paragraph(f"（圖表載入失敗：{_t(e)}）", SMAL))
 
     # ── 事件 ──
     events = result.get("events", [])
@@ -816,8 +907,10 @@ def _build_stability_pdf(result, chart_b64, site_info):
         type_label = {"roam": "漫遊", "disconnect": "斷線",
                       "reconnect": "重連", "channel_change": "頻道切換"}
         for e in events:
-            ev_rows.append([f"{e['t']:.0f}",
-                            type_label.get(e["type"], e["type"]), e["detail"]])
+            t = e.get("t")
+            ev_rows.append([f"{t:.0f}" if isinstance(t, (int, float)) else str(t or "—"),
+                            type_label.get(e.get("type"), str(e.get("type") or "")),
+                            str(e.get("detail") or "")])
         story.append(_data_table(ev_rows, FONT, BLUE, header=True))
     else:
         story.append(Paragraph("測試期間無漫遊、斷線或頻道切換事件。", BODY))
@@ -831,13 +924,14 @@ def _build_stability_pdf(result, chart_b64, site_info):
     SEV_COLOR = {"critical": "#dc2626", "warning": "#ca8a04",
                  "info": "#2563eb", "good": "#16a34a"}
     for f in result.get("findings", []):
-        c = SEV_COLOR.get(f["severity"], "#000000")
+        sev = f.get("severity")
+        c = SEV_COLOR.get(sev, "#000000")
         story.append(Paragraph(
-            f'<font color="{c}">{SEV_LABEL.get(f["severity"], "")}'
-            f'{f["title"]}</font>', BODY))
+            f'<font color="{c}">{SEV_LABEL.get(sev, "")}'
+            f'{_t(f.get("title"))}</font>', BODY))
         if f.get("detail"):
-            story.append(Paragraph(f'　{f["detail"]}', SMAL))
-        story.append(Paragraph(f'　→ {f["recommendation"]}', SMAL))
+            story.append(Paragraph(f'　{_t(f["detail"])}', SMAL))
+        story.append(Paragraph(f'　→ {_t(f.get("recommendation"))}', SMAL))
         story.append(Spacer(1, 0.15*cm))
 
     story += [
@@ -855,22 +949,28 @@ def _build_stability_pdf(result, chart_b64, site_info):
 def _fallback_stability_html(result) -> str:
     grade = result.get("grade", {})
     rows = "\n".join(
-        f"<li>[{f['severity']}] {f['title']} — {f['recommendation']}</li>"
+        f"<li>[{_xesc(str(f.get('severity')))}] {_xesc(str(f.get('title')))} — {_xesc(str(f.get('recommendation')))}</li>"
         for f in result.get("findings", []))
     return f"""<html><meta charset="utf-8"><body>
 <h1>Wi-Fi 連線穩定度報告</h1>
-<p>SSID: {result.get('ssid')} ｜ 分數: {result.get('score')}/100
-（{grade.get('label','')}）</p><ul>{rows}</ul></body></html>"""
+<p>SSID: {_xesc(str(result.get('ssid')))} ｜ 分數: {_xesc(str(result.get('score')))}/100
+（{_xesc(str(grade.get('label','')))}）</p><ul>{rows}</ul></body></html>"""
 
 
 # ── Table helpers ──────────────────────────────────────────────────────────────
+def _cells(data):
+    """表格純文字儲存格做缺字替換（Paragraph 等 flowable 原樣保留）。"""
+    return [[_p(c) if isinstance(c, (str, int, float)) or c is None else c
+             for c in row] for row in data]
+
+
 def _kv_table(data, font, col_w=None, font_size=9):
     from reportlab.platypus import Table, TableStyle
     from reportlab.lib import colors
     from reportlab.lib.units import cm
     if col_w is None:
         col_w = [4*cm, 12*cm]
-    tbl = Table(data, colWidths=col_w)
+    tbl = Table(_cells(data), colWidths=col_w)
     tbl.setStyle(TableStyle([
         ("FONTNAME",     (0,0), (-1,-1), font),
         ("FONTSIZE",     (0,0), (-1,-1), font_size),
@@ -890,7 +990,7 @@ def _kv_table(data, font, col_w=None, font_size=9):
 def _data_table(data, font, header_color, header=False):
     from reportlab.platypus import Table, TableStyle
     from reportlab.lib import colors
-    tbl = Table(data)
+    tbl = Table(_cells(data))
     style = [
         ("FONTNAME",      (0,0), (-1,-1), font),
         ("FONTSIZE",      (0,0), (-1,-1), 8),
@@ -937,9 +1037,9 @@ def _net_style(font, header_color, alt_color):
 def _fallback_html(site_info, networks, analysis) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     rows = "\n".join(
-        f"<tr><td>{n.get('ssid','—')}</td><td>{n.get('channel','')}</td>"
-        f"<td>{n.get('band','')}</td><td>{n.get('rssi','')} dBm</td>"
-        f"<td>{n.get('snr','')} dB</td><td>{n.get('quality_label','')}</td></tr>"
+        f"<tr><td>{_xesc(str(n.get('ssid','—')))}</td><td>{_xesc(str(n.get('channel','')))}</td>"
+        f"<td>{_xesc(str(n.get('band','')))}</td><td>{_xesc(str(n.get('rssi','')))} dBm</td>"
+        f"<td>{_xesc(str(n.get('snr','')))} dB</td><td>{_xesc(str(n.get('quality_label','')))}</td></tr>"
         for n in networks
     )
     return f"""<!DOCTYPE html><html><head><title>Wi-Fi Survey Report</title>
@@ -949,7 +1049,7 @@ table{{border-collapse:collapse;width:100%}}
 th,td{{border:1px solid #ccc;padding:4px 8px;font-size:12px}}
 th{{background:#1e40af;color:white}}</style></head><body>
 <h1>Wi-Fi 現場勘測報告</h1>
-<p>場地：{site_info.get('site','')} | 日期：{now}</p>
+<p>場地：{_xesc(str(site_info.get('site','')))} | 日期：{now}</p>
 <h2>鄰近網路清單</h2>
 <table><tr><th>SSID</th><th>頻道</th><th>頻段</th>
 <th>RSSI</th><th>SNR</th><th>評級</th></tr>

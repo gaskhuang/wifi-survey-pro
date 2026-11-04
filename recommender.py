@@ -5,6 +5,12 @@ Wi-Fi Site Recommender — 智慧分析引擎
 """
 from typing import Optional
 
+# ─── 共用 RSSI 門檻（dBm）：訊號檢查、熱圖覆蓋、報告文字一律引用這裡 ──────────────
+DATA_RSSI      = -65   # 數據業務最佳門檻（≥ 為優）
+VOICE_RSSI     = -67   # 語音 / 視訊 / 漫遊建議門檻
+DEAD_ZONE_RSSI = -70   # 死角判定門檻（< 為死角）
+ROAM_OVERLAP   = f"{VOICE_RSSI} ~ {DEAD_ZONE_RSSI} dBm"   # 相鄰 AP 覆蓋重疊區建議值
+
 
 # ─── 分析主函式 ────────────────────────────────────────────────────────────────
 def full_assessment(
@@ -69,36 +75,50 @@ def full_assessment(
 
 # ─── 個別檢查函式 ──────────────────────────────────────────────────────────────
 
+def _num(v):
+    """數值欄位：None / 非數字回傳 None（呼叫端據此略過檢查）。"""
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return v
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _check_signal(cur: dict, issues: list):
-    rssi = cur.get("rssi", -100)
-    if rssi < -75:
+    rssi = _num(cur.get("rssi"))
+    if rssi is None:
+        return   # 無 RSSI 資料就不評
+    if rssi < DEAD_ZONE_RSSI:
         issues.append({
             "severity": "critical",
             "category": "訊號強度",
             "icon": "📶",
             "title": f"訊號過弱（{rssi} dBm）",
-            "problem": f"目前 RSSI {rssi} dBm，已低於企業死角門檻 -70 dBm。視訊會議、VoIP 都會掉線。",
-            "recommendation": "在距離 AP 更近的位置使用，或在此區域新增一台 AP（建議相鄰 AP 覆蓋重疊區保持 -67 ~ -72 dBm）。",
+            "problem": f"目前 RSSI {rssi} dBm，已低於企業死角門檻 {DEAD_ZONE_RSSI} dBm。視訊會議、VoIP 容易斷線。",
+            "recommendation": f"在距離 AP 更近的位置使用，或在此區域新增一台 AP（建議相鄰 AP 覆蓋重疊區保持 {ROAM_OVERLAP}）。",
             "value": rssi,
         })
-    elif rssi < -70:
+    elif rssi < VOICE_RSSI:
         issues.append({
             "severity": "warning",
             "category": "訊號強度",
             "icon": "📶",
             "title": f"訊號偏弱（{rssi} dBm）",
-            "problem": f"RSSI {rssi} dBm，低於語音/漫遊建議門檻 -67 dBm，VoIP 通話品質可能不穩。",
-            "recommendation": "調整 AP 位置或功率；若企業環境建議「降功率多佈點」策略，覆蓋重疊區設在 -67 ~ -72 dBm。",
+            "problem": f"RSSI {rssi} dBm，低於語音/漫遊建議門檻 {VOICE_RSSI} dBm（接近 {DEAD_ZONE_RSSI} dBm 死角門檻），VoIP 通話品質可能不穩。",
+            "recommendation": f"調整 AP 位置或功率；若企業環境建議「降功率多佈點」策略，覆蓋重疊區設在 {ROAM_OVERLAP}。",
             "value": rssi,
         })
-    elif rssi < -65:
+    elif rssi < DATA_RSSI:
         issues.append({
             "severity": "info",
             "category": "訊號強度",
             "icon": "📶",
             "title": f"訊號普通（{rssi} dBm）",
-            "problem": f"RSSI {rssi} dBm，可滿足一般上網，但略低於數據業務最佳門檻 -65 dBm。",
-            "recommendation": "若有視訊需求，建議優化至 ≥ -65 dBm。可調整 AP 天線方向或稍微靠近 AP。",
+            "problem": f"RSSI {rssi} dBm，可滿足一般上網，但略低於數據業務最佳門檻 {DATA_RSSI} dBm。",
+            "recommendation": f"若有視訊需求，建議優化至 ≥ {DATA_RSSI} dBm。可調整 AP 天線方向或稍微靠近 AP。",
             "value": rssi,
         })
     else:
@@ -108,14 +128,18 @@ def _check_signal(cur: dict, issues: list):
             "icon": "📶",
             "title": f"訊號優異（{rssi} dBm）",
             "problem": "",
-            "recommendation": "✓ 訊號強度符合企業標準（≥ -65 dBm）。",
+            "recommendation": f"✓ 訊號強度符合企業標準（≥ {DATA_RSSI} dBm）。",
             "value": rssi,
         })
 
 
 def _check_snr(cur: dict, issues: list):
-    snr = cur.get("snr", 0)
-    noise = cur.get("noise", -95)
+    snr = _num(cur.get("snr"))
+    if snr is None:
+        return   # 缺 SNR 不可當 0 dB（會誤報 critical）
+    noise = cur.get("noise")
+    if noise is None:
+        noise = "—"
     if snr < 15:
         issues.append({
             "severity": "critical",
@@ -159,9 +183,9 @@ def _check_snr(cur: dict, issues: list):
 
 
 def _check_txrate(cur: dict, issues: list):
-    tx = cur.get("tx_rate", 0)
-    rssi = cur.get("rssi", -100)
-    if tx and tx < 54 and rssi > -70:
+    tx = _num(cur.get("tx_rate"))
+    rssi = _num(cur.get("rssi"))
+    if tx and rssi is not None and tx < 54 and rssi >= DEAD_ZONE_RSSI:
         issues.append({
             "severity": "warning",
             "category": "連線速率",
@@ -174,7 +198,7 @@ def _check_txrate(cur: dict, issues: list):
 
 
 def _check_wifi_gen(cur: dict, issues: list):
-    std = cur.get("standard", "")
+    std = str(cur.get("standard") or "")
     gen = 0
     if "802.11be" in std or "Wi-Fi 7" in std: gen = 7
     elif "802.11ax" in std or "Wi-Fi 6" in std: gen = 6
@@ -229,51 +253,121 @@ def _check_band(cur: dict, issues: list):
         })
 
 
+def _congested_channels(analysis: dict) -> dict:
+    """各頻段的壅塞頻道 {band: [(ch, occupants, score), …]}，依嚴重度排序。"""
+    out = {}
+    for band in ("2.4GHz", "5GHz", "6GHz"):
+        channels = (analysis.get(band) or {}).get("channels") or {}
+        lst = []
+        for ch_str, info in channels.items():
+            occ = _num(info.get("occupants")) or 0
+            score = _num(info.get("congestion_score")) or 0
+            if occ >= 6 or score >= 70:
+                try:
+                    lst.append((int(ch_str), int(occ), float(score)))
+                except (TypeError, ValueError):
+                    continue
+        if lst:
+            out[band] = sorted(lst, key=lambda x: (-x[2], -x[1], x[0]))
+    return out
+
+
+def _own_band(current: dict):
+    """使用者目前連線的頻段；未連線 / 未知回傳 None。"""
+    if current.get("connected") is False:
+        return None
+    return current.get("band") or None
+
+
 def _check_channel_congestion(analysis: dict, current: dict, issues: list):
+    """每個頻段最多一條壅塞項目（避免同一現象每個頻道各扣一次分）。
+    嚴重度：自己的頻道壅塞 → critical/warning；未連線（純勘測）→ warning；
+    非自己所在頻段 / 非自己頻道 → info。"""
     cur_chan = current.get("channel")
-    cur_band = current.get("band", "")
+    own_band = _own_band(current)
+    congested = _congested_channels(analysis)
 
     for band in ("2.4GHz", "5GHz", "6GHz"):
-        band_data = analysis.get(band, {})
-        channels  = band_data.get("channels", {})
-        best      = band_data.get("best_channels", [])
+        band_data = analysis.get(band) or {}
+        channels  = band_data.get("channels") or {}
+        best      = band_data.get("best_channels") or []
+        best_ch   = best[0]["channel"] if best else "?"
+        lst = congested.get(band)
 
+        if lst:
+            own_hit = next((x for x in lst if x[0] == cur_chan), None) \
+                if own_band == band else None
+            if own_hit:
+                sev = "critical" if own_hit[1] >= 6 else "warning"
+            elif own_band is None:
+                sev = "warning"
+            else:
+                sev = "info"
+            worst = own_hit or lst[0]
+            shown = "、".join(f"ch{c}（{o} 個 AP，{sc:.0f}/100）" for c, o, sc in lst[:4])
+            more = f" 等 {len(lst)} 個頻道" if len(lst) > 4 else ""
+            if own_hit:
+                title = f"{band} 頻道 {worst[0]} 嚴重壅塞（{worst[1]} 個 AP，您正在使用）"
+                note = "您目前就連在其中的頻道，會直接影響速度與延遲。"
+                rec = (f"將 AP 切換至 {band} 頻道 {best_ch}（壅塞分數最低）；"
+                       "若 AP 支援 802.11k/v/r，可搭配自動頻道選擇（ACS）。")
+            elif own_band is None or own_band == band:
+                title = (f"{band} 頻道 {worst[0]} 嚴重壅塞（{worst[1]} 個 AP）" if len(lst) == 1
+                         else f"{band} 有 {len(lst)} 個壅塞頻道（最嚴重 ch{worst[0]}）")
+                note = ("目前連線頻道不在其中，對現有連線影響有限；規劃 AP 時請避開。"
+                        if own_band == band else "規劃或調整 AP 時請避開這些頻道。")
+                rec = (f"將此頻段的 AP 改用 {band} 頻道 {best_ch}（壅塞分數最低）；"
+                       "若 AP 支援 802.11k/v/r，可搭配自動頻道選擇（ACS）。")
+            else:
+                title = f"{band} 鄰居頻道壅塞（{len(lst)} 個頻道，非目前連線頻段）"
+                note = f"您目前連在 {own_band}，此頻段壅塞不影響現有連線。"
+                rec = f"若需在 {band} 部署或調整 AP，請改用頻道 {best_ch}，避開上述壅塞頻道。"
+            issues.append({
+                "severity": sev,
+                "category": "頻道壅塞",
+                "icon": "📡",
+                "title": title,
+                "problem": f"{band} 壅塞頻道：{shown}{more}，同頻干擾嚴重。{note}",
+                "recommendation": rec,
+                "value": worst[1],
+            })
+            continue
+
+        # 無嚴重壅塞：中度佔用時提示更好的頻道（每頻段一條）
         for ch_str, info in channels.items():
-            occ = info.get("occupants", 0)
-            score = info.get("congestion_score", 0)
-            ch = int(ch_str)
-
-            if occ >= 6 or score >= 70:
-                is_current = (ch == cur_chan and band == cur_band)
-                sev = "critical" if (is_current and occ >= 6) else "warning"
-                best_ch = best[0]["channel"] if best else "?"
+            occ = _num(info.get("occupants")) or 0
+            score = _num(info.get("congestion_score")) or 0
+            try:
+                ch = int(ch_str)
+            except (TypeError, ValueError):
+                continue
+            if (occ >= 3 or score >= 40) and best and best[0]["channel"] != ch \
+                    and best[0]["congestion"] < score * 0.5:
                 issues.append({
-                    "severity": sev,
-                    "category": "頻道壅塞",
-                    "icon": "📡",
-                    "title": f"{band} 頻道 {ch} 嚴重壅塞（{occ} 個 AP）",
-                    "problem": f"頻道 {ch} 有 {occ} 個鄰居 AP，壅塞分數 {score:.0f}/100，同頻干擾嚴重{'（您正在使用此頻道）' if is_current else ''}。",
-                    "recommendation": f"將 AP 切換至 {band} 頻道 {best_ch}（壅塞分數最低）；若 AP 支援 802.11k/v/r，可搭配自動頻道選擇（ACS）。",
-                    "value": occ,
+                    "severity": "info",
+                    "category": "頻道配置",
+                    "icon": "🔄",
+                    "title": f"{band} 有更好的頻道可選",
+                    "problem": f"頻道 {ch} 壅塞分數 {score:.0f}，而頻道 {best_ch} 分數更低。",
+                    "recommendation": f"考慮將 {band} AP 切換至頻道 {best_ch} 以降低同頻干擾。",
+                    "value": score,
                 })
-            elif occ >= 3 or score >= 40:
-                best_ch = best[0]["channel"] if best else "?"
-                if best and best[0]["channel"] != ch and best[0]["congestion"] < score * 0.5:
-                    issues.append({
-                        "severity": "info",
-                        "category": "頻道配置",
-                        "icon": "🔄",
-                        "title": f"{band} 有更好的頻道可選",
-                        "problem": f"目前頻道 {ch} 壅塞分數 {score:.0f}，而頻道 {best_ch} 分數更低。",
-                        "recommendation": f"考慮將 {band} AP 切換至頻道 {best_ch} 以降低同頻干擾。",
-                        "value": score,
-                    })
-                    break  # one suggestion per band is enough
+                break  # one suggestion per band is enough
 
 
 def _check_co_channel(analysis: dict, issues: list):
-    coi = analysis.get("summary", {}).get("co_channel_hotspots", 0)
-    if coi >= 3:
+    coi = _num((analysis.get("summary") or {}).get("co_channel_hotspots")) or 0
+    coi = int(coi)
+    if coi < 1:
+        return
+    # 已由「頻道壅塞」涵蓋的頻段不重複扣 warning
+    congested = _congested_channels(analysis)
+    covered = 0
+    for band in congested:
+        chs = (analysis.get(band) or {}).get("channels") or {}
+        covered += sum(1 for i in chs.values() if (_num(i.get("occupants")) or 0) > 2)
+    uncovered = max(0, coi - covered)
+    if uncovered >= 3:
         issues.append({
             "severity": "warning",
             "category": "同頻干擾",
@@ -283,13 +377,14 @@ def _check_co_channel(analysis: dict, issues: list):
             "recommendation": "重新規劃 AP 頻道分配；2.4GHz 嚴格使用 1/6/11；5GHz 善用 UNII-1 非 DFS 頻道；高密度環境降頻寬至 20MHz。",
             "value": coi,
         })
-    elif coi >= 1:
+    else:
+        extra = "（主要熱區已列於「頻道壅塞」項目）" if covered else ""
         issues.append({
             "severity": "info",
             "category": "同頻干擾",
             "icon": "⚡",
-            "title": f"輕微同頻干擾（{coi} 個頻道）",
-            "problem": f"有 {coi} 個頻道存在輕度同頻使用。",
+            "title": f"同頻干擾熱區 {coi} 個{extra}" if covered else f"輕微同頻干擾（{coi} 個頻道）",
+            "problem": f"有 {coi} 個頻道存在多個 AP 同頻使用。",
             "recommendation": "持續監控；若速率下降，可調整頻道或降低 AP 發射功率以縮小覆蓋重疊區。",
             "value": coi,
         })
@@ -313,10 +408,12 @@ def _check_24g_overlap(analysis: dict, issues: list):
 
 
 def _check_security(networks: list, issues: list):
-    open_nets = [n for n in networks if n.get("is_open") and not n["ssid"].startswith("<")]
-    wpa2_only = [n for n in networks if "WPA2" in n.get("security", "") and "WPA3" not in n.get("security", "")]
+    def sec(n):
+        return str(n.get("security") or "")
+    open_nets = [n for n in networks
+                 if n.get("is_open") and not (n.get("ssid") or "").startswith("<")]
     if open_nets:
-        names = ", ".join(n["ssid"] for n in open_nets[:3])
+        names = ", ".join((n.get("ssid") or "(未命名)") for n in open_nets[:3])
         issues.append({
             "severity": "warning",
             "category": "安全性",
@@ -327,7 +424,7 @@ def _check_security(networks: list, issues: list):
             "value": len(open_nets),
         })
 
-    wpa3_nets = sum(1 for n in networks if "WPA3" in n.get("security", ""))
+    wpa3_nets = sum(1 for n in networks if "WPA3" in sec(n))
     if wpa3_nets == 0 and len(networks) > 0:
         issues.append({
             "severity": "info",
@@ -487,9 +584,11 @@ def _check_neighbor_density(networks: list, issues: list):
         b = n.get("band")
         if b: bands[b] = bands.get(b, 0) + 1
 
+    # 已有「頻道壅塞」項目時同一現象不再重複扣 warning
+    has_congestion = any(i.get("category") == "頻道壅塞" for i in issues)
     if total >= 20:
         issues.append({
-            "severity": "warning",
+            "severity": "info" if has_congestion else "warning",
             "category": "AP 密度",
             "icon": "🏢",
             "title": f"高密度環境（{total} 個鄰居 AP）",
@@ -536,28 +635,31 @@ def _check_6g_availability(networks: list, current: dict, issues: list):
 
 def _check_coverage_gaps(measurements: list, issues: list):
     if not measurements: return
-    weak_pts = [m for m in measurements if m.get("rssi", 0) < -70]
-    total = len(measurements)
-    if weak_pts and total > 0:
-        pct = len(weak_pts) / total * 100
+    pts = [_num(m.get("rssi")) for m in measurements if isinstance(m, dict)]
+    pts = [r for r in pts if r is not None]      # 缺 RSSI 的量測點不納入
+    if not pts: return
+    weak = [r for r in pts if r < DEAD_ZONE_RSSI]
+    total = len(pts)
+    if weak:
+        pct = len(weak) / total * 100
         issues.append({
             "severity": "critical" if pct > 30 else "warning",
             "category": "覆蓋死角",
             "icon": "🗺️",
-            "title": f"熱圖量測發現 {len(weak_pts)} 個死角（{pct:.0f}% 區域訊號不足）",
-            "problem": f"在 {total} 個量測點中，{len(weak_pts)} 個（{pct:.0f}%）的 RSSI 低於 -70 dBm 死角門檻。",
-            "recommendation": "在死角位置增設 AP；參考熱圖確認最佳 AP 位置；企業環境建議 AP 覆蓋重疊率達 20%（覆蓋邊緣 -67 ~ -72 dBm）。",
-            "value": len(weak_pts),
+            "title": f"熱圖量測發現 {len(weak)} 個死角（{pct:.0f}% 區域訊號不足）",
+            "problem": f"在 {total} 個量測點中，{len(weak)} 個（{pct:.0f}%）的 RSSI 低於 {DEAD_ZONE_RSSI} dBm 死角門檻。",
+            "recommendation": f"在死角位置增設 AP；參考熱圖確認最佳 AP 位置；企業環境建議 AP 覆蓋重疊率達 20%（覆蓋邊緣 {ROAM_OVERLAP}）。",
+            "value": len(weak),
         })
-    elif measurements:
-        avg_rssi = sum(m["rssi"] for m in measurements) / len(measurements)
+    else:
+        avg_rssi = sum(pts) / total
         issues.append({
             "severity": "good",
             "category": "覆蓋品質",
             "icon": "🗺️",
             "title": f"覆蓋量測全數達標（均值 {avg_rssi:.0f} dBm）✓",
             "problem": "",
-            "recommendation": f"✓ {total} 個量測點均 ≥ -70 dBm，覆蓋品質良好。",
+            "recommendation": f"✓ {total} 個量測點均 ≥ {DEAD_ZONE_RSSI} dBm，覆蓋品質良好。",
             "value": avg_rssi,
         })
 

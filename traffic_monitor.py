@@ -12,6 +12,7 @@ traffic_monitor.py — 輕量流量異常監測（NetInspect Pro P2）
 """
 import re
 import time
+import heapq
 import threading
 import subprocess
 
@@ -31,6 +32,9 @@ _IPV4 = re.compile(r"(?<![\d.])(" + _OCTET + r"(?:\." + _OCTET + r"){3})")
 _ARP_TELL = re.compile(r"\btell (" + _OCTET + r"(?:\." + _OCTET + r"){3})")
 
 BROADCAST = "ff:ff:ff:ff:ff:ff"
+MAX_SOURCES = 50_000            # by_src 上限（MAC 洪水/偽造 MAC 時避免記憶體與 CPU 失控）
+SNAPLEN = 96                    # 只需 L2/L3/L4 標頭；-s 96 大幅降低 BPF 複製量與丟包
+_DROPPED = re.compile(r"(\d+) packets? dropped by kernel")
 
 
 def _is_multicast(mac: str) -> bool:
@@ -115,6 +119,8 @@ class Capture:
         self._stderr = []       # tcpdump stderr 尾段（供失敗時回報真正原因）
         # 彙整
         self.by_src = {}        # mac → {"pkts","bytes","bcast","mcast","arp","ip"}
+        self.overflow_pkts = 0  # 來源數超過 MAX_SOURCES 後，新來源的封包只計總量不逐一記錄
+        self.kernel_dropped = None   # tcpdump 結束時回報的「packets dropped by kernel」
         self.total_pkts = 0
         self.total_bytes = 0
         self.bcast = 0
@@ -137,6 +143,16 @@ class Capture:
     def _rec(self, src, dst, etype, length, src_ip):
         s = self.by_src.get(src)
         if s is None:
+            if len(self.by_src) >= MAX_SOURCES:
+                # 已達上限：只計入總量/廣播統計，不再新增來源（MAC 洪水本身會由警示旗標反映）
+                self.overflow_pkts += 1
+                self.total_pkts += 1
+                self.total_bytes += length
+                if dst == BROADCAST:
+                    self.bcast += 1
+                elif _is_multicast(dst):
+                    self.mcast += 1
+                return
             s = {"pkts": 0, "bytes": 0, "bcast": 0, "mcast": 0, "arp": 0, "ip": ""}
             self.by_src[src] = s
         s["pkts"] += 1
@@ -162,7 +178,8 @@ class Capture:
                 "無法擷取封包：需要系統管理員權限或加入 access_bpf 群組。"
                 "可安裝 Wireshark 的 ChmodBPF，或以 sudo 執行本程式。")
         # 注意：不可加 -q，否則輸出格式改變（省略 "ethertype"）導致解析失敗
-        cmd = [_bin("tcpdump"), "-i", self.iface, "-n", "-e", "-t", "-l", "-K"]
+        cmd = [_bin("tcpdump"), "-i", self.iface, "-n", "-e", "-t", "-l", "-K",
+               "-s", str(SNAPLEN)]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, bufsize=1, creationflags=flags)
@@ -188,17 +205,20 @@ class Capture:
                 p = _parse(line.strip())
                 if p:
                     self._rec(*p)
-                now = time.time()
-                if on_stats and now - last_emit >= 1.0:
-                    last_emit = now
+                if on_stats and time.time() - last_emit >= 1.0:
                     on_stats(self.snapshot(final=False))
+                    last_emit = time.time()      # 快照完成後才計時，慢快照不會連續觸發而餓死讀取迴圈
         except Exception:
             pass
         finally:
             self.stop()
+        errt.join(timeout=1)                     # tcpdump 結束時才把統計（含 kernel 丟包）寫到 stderr
+        for l in self._stderr:
+            dm = _DROPPED.search(l)
+            if dm:
+                self.kernel_dropped = int(dm.group(1))
         # 完全沒抓到封包且 tcpdump 有錯誤 → 回報真正原因（而非誤導的「封包極少」）
         if self.total_pkts == 0:
-            errt.join(timeout=1)
             errtxt = " ".join(self._stderr)
             rc = self.proc.returncode
             if (rc not in (0, None)) or any(k in errtxt for k in (
@@ -220,9 +240,11 @@ class Capture:
         return max(0.5, (time.time() - self.started) if self.started else 0.5)
 
     def _talkers(self, limit=15):
+        """前 limit 名發送者：heapq.nlargest O(n log k)，只對入榜者查廠牌（不對全部來源跑 regex）。"""
         el = self._elapsed()
         rows = []
-        for mac, s in self.by_src.items():
+        top = heapq.nlargest(limit, self.by_src.items(), key=lambda kv: kv[1]["pkts"])
+        for mac, s in top:
             share = (s["pkts"] / self.total_pkts * 100) if self.total_pkts else 0
             rows.append({
                 "mac": mac, "vendor": _vendor(mac) or "未知", "ip": s["ip"],
@@ -231,8 +253,7 @@ class Capture:
                 "bcast": s["bcast"], "mcast": s["mcast"], "arp": s["arp"],
                 "share": round(share, 1),
             })
-        rows.sort(key=lambda r: r["pkts"], reverse=True)
-        return rows[:limit]
+        return rows
 
     def snapshot(self, final=False):
         el = self._elapsed()
@@ -243,6 +264,9 @@ class Capture:
             "bcast": self.bcast, "mcast": self.mcast,
             "bcast_pct": round(self.bcast / self.total_pkts * 100, 1) if self.total_pkts else 0,
             "sources": len(self.by_src),
+            "sources_capped": len(self.by_src) >= MAX_SOURCES,   # 來源數達上限（疑似 MAC 洪水）
+            "overflow_pkts": self.overflow_pkts,
+            "kernel_dropped": self.kernel_dropped,
             "talkers": self._talkers(),
             "final": final,
         }
@@ -255,7 +279,7 @@ class Capture:
         pps = self.total_pkts / el
         bcast_pps = self.bcast / el
         mcast_pps = self.mcast / el
-        talkers = self._talkers()
+        talkers = snap["talkers"]               # 重用快照，不再對全部來源重算
 
         def iplabel(t):
             return f"{t['vendor']}（{t['ip'] or t['mac']}）"
@@ -293,10 +317,21 @@ class Capture:
                 "value": round(bcast_pps, 1),
             })
 
-        # ARP 洪水 / 掃描
-        arp_top = sorted(self.by_src.items(), key=lambda kv: kv[1]["arp"], reverse=True)
-        if arp_top and arp_top[0][1]["arp"] / el > 20:
-            mac, s = arp_top[0]
+        # 來源數爆量（MAC 洪水 / 偽造來源）
+        if snap["sources_capped"]:
+            issues.append({
+                "severity": "critical", "category": "MAC 洪水", "icon": "🌊",
+                "title": f"來源 MAC 數量異常（已達上限 {MAX_SOURCES:,}）",
+                "problem": f"擷取期間出現超過 {MAX_SOURCES:,} 個不同來源 MAC，另有 {self.overflow_pkts:,} 個封包"
+                           "來自未逐一記錄的來源。正常區網不會有這麼多設備，常見於 MAC 洪水攻擊或迴圈。",
+                "recommendation": "在交換器啟用 Port Security / MAC 數量限制，找出洪水來源埠並隔離。",
+                "value": len(self.by_src),
+            })
+
+        # ARP 洪水 / 掃描（O(n) 取最大值，不排序全部來源）
+        arp_best = max(self.by_src.items(), key=lambda kv: kv[1]["arp"], default=None)
+        if arp_best and arp_best[1]["arp"] / el > 20:
+            mac, s = arp_best
             issues.append({
                 "severity": "warning", "category": "ARP 洪水 / 掃描", "icon": "⚡",
                 "title": f"單一來源大量 ARP（{s['arp']/el:.0f} 個/秒）",
@@ -326,8 +361,19 @@ class Capture:
             "value": self.total_pkts,
         })
 
+        if self.kernel_dropped:
+            issues.insert(len(issues) - 1, {
+                "severity": "info", "category": "擷取完整度", "icon": "🧮",
+                "title": f"核心丟棄 {self.kernel_dropped:,} 個封包（統計可能偏低）",
+                "problem": "流量超過擷取處理速度，tcpdump 回報 packets dropped by kernel。",
+                "recommendation": "縮短擷取時間或於流量較低時重測；數據以趨勢參考為主。",
+                "value": self.kernel_dropped,
+            })
+
         result = recommendations._pack(issues, "流量狀況正常，未見明顯異常。")
-        result["snapshot"] = self.snapshot(final=True)
+        result["snapshot"] = snap
+        result["kernel_dropped"] = self.kernel_dropped
+        result["sources_capped"] = snap["sources_capped"]
         return result
 
 

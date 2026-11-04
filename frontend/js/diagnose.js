@@ -71,13 +71,13 @@
       if (!el) return;
       if (d.status === "running") {
         el.className = "diag-step running";
-        el.innerHTML = `<span class="step-icon"></span>${d.label}`;
+        el.innerHTML = `<span class="step-icon"></span>${escHtml(d.label)}`;
       } else if (d.status === "ok") {
         el.className = "diag-step ok";
-        el.innerHTML = `<span class="step-icon"></span>${d.label}`;
+        el.innerHTML = `<span class="step-icon"></span>${escHtml(d.label)}`;
       } else {
         el.className = "diag-step fail";
-        el.innerHTML = `<span class="step-icon"></span>${d.label}` +
+        el.innerHTML = `<span class="step-icon"></span>${escHtml(d.label)}` +
           (d.error ? ` <span style="font-size:10px;color:var(--text-3)">（${escHtml(d.error)}）</span>` : "");
       }
     });
@@ -87,8 +87,8 @@
       const el = _stepEls[d.key];
       if (!el || !el.classList.contains("running")) return;
       const extra = d.key === "stability"
-        ? `（${Math.round(d.elapsed)} / ${d.total} 秒）`
-        : `（已分析 ${d.elapsed} 秒）`;
+        ? `（${Math.round(d.elapsed)} / ${escHtml(d.total)} 秒）`
+        : `（已分析 ${escHtml(d.elapsed)} 秒）`;
       const lbl = DG_STEPS.find(s => s.key === d.key)?.label || "";
       el.innerHTML = `<span class="step-icon"></span>${lbl} <span style="font-size:10px;color:var(--text-3)">${extra}</span>`;
     });
@@ -155,20 +155,20 @@
         <div class="card-val" ${color ? `style="color:${color}"` : ""}>${val}</div>
         ${sub ? `<div class="card-sub">${sub}</div>` : ""}</div>`;
 
-    const fmt = (v, unit) => v != null ? `${v}<span style="font-size:11px;color:var(--text-2)"> ${unit}</span>` : "—";
+    const fmt = (v, unit) => v != null ? `${escHtml(v)}<span style="font-size:11px;color:var(--text-2)"> ${unit}</span>` : "—";
 
     document.getElementById("dg-cards").innerHTML = [
       card("訊號 RSSI", cur.connected ? fmt(cur.rssi, "dBm") : "未連線",
-           cur.ssid || "", cur.connected ? rssiToColor(cur.rssi) : "#ef4444"),
+           escHtml(cur.ssid || ""), cur.connected ? rssiToColor(cur.rssi) : "#ef4444"),
       card("SNR", fmt(cur.snr, "dB"), "", cur.snr != null ? snrColor(cur.snr) : ""),
       card("下載", fmt(spd.down_mbps, "Mbps")),
       card("上傳", fmt(spd.up_mbps, "Mbps")),
-      card("Ping", fmt(np.ping_ms, "ms"), np.ping_jitter_ms != null ? `Jitter ${np.ping_jitter_ms} ms` : ""),
+      card("Ping", fmt(np.ping_ms, "ms"), np.ping_jitter_ms != null ? `Jitter ${escHtml(np.ping_jitter_ms)} ms` : ""),
       card("掉包", fmt(np.ping_loss_pct, "%"),
            "", np.ping_loss_pct > 0 ? "#ef4444" : "#22c55e"),
       card("穩定度", stab.score != null
-           ? `${stab.score}<span style="font-size:11px;color:var(--text-2)"> /100</span>` : "—",
-           stab.grade?.label || "", stab.grade?.color || ""),
+           ? `${escHtml(stab.score)}<span style="font-size:11px;color:var(--text-2)"> /100</span>` : "—",
+           escHtml(stab.grade?.label || ""), escHtml(stab.grade?.color || "")),
     ].join("");
   }
 
@@ -283,7 +283,7 @@
     summaryEl.innerHTML =
       `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
          <div><strong>AI 診斷摘要</strong>　${escHtml(ai.summary || "")}</div>
-         <div style="font-size:10.5px;color:var(--text-3);white-space:nowrap">${providerTxt} ｜ 健康分數 <strong style="color:${ai.score>=70?"#22c55e":ai.score>=50?"#eab308":"#ef4444"}">${ai.score}</strong>/100</div>
+         <div style="font-size:10.5px;color:var(--text-3);white-space:nowrap">${providerTxt} ｜ 健康分數 <strong style="color:${ai.score>=70?"#22c55e":ai.score>=50?"#eab308":"#ef4444"}">${escHtml(ai.score)}</strong>/100</div>
        </div>`;
 
     const PRIO = [
@@ -313,11 +313,14 @@
     listEl.innerHTML = html;
   }
 
-  // 顯示 AI provider 提示（idle 畫面）
-  fetch("/api/info").then(r => r.json()).then(d => {
-    document.getElementById("dg-ai-provider").textContent =
-      d.ai_provider === "codex"
-        ? "🤖 AI 分析引擎：Codex CLI（已登入）"
-        : "📋 AI 分析引擎：離線規則引擎（安裝並登入 Codex CLI 可啟用 AI 分析）";
-  }).catch(() => {});
+  // 顯示 AI provider 提示（idle 畫面）；本分頁是預設分頁，載入時即可見 → 立即執行，
+  // 若非可見分頁則延到第一次開啟
+  onTabFirstActive("diagnose", () => {
+    fetch("/api/info").then(r => r.json()).then(d => {
+      document.getElementById("dg-ai-provider").textContent =
+        d.ai_provider === "codex"
+          ? "🤖 AI 分析引擎：Codex CLI（已登入）"
+          : "📋 AI 分析引擎：離線規則引擎（安裝並登入 Codex CLI 可啟用 AI 分析）";
+    }).catch(() => {});
+  });
 })();

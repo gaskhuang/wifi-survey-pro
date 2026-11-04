@@ -177,7 +177,7 @@ function renderBestChannels(band, bandData, elId) {
     best.map((b, i) => {
       const cls = i === 0 ? "good" : b.congestion > 40 ? "warn" : "";
       const dfs = b.is_dfs ? " ⚠DFS" : "";
-      return `<span class="best-ch-badge ${cls}" title="${b.reason||''}">ch${b.channel}${i===0?" ★":""}${dfs}</span>`;
+      return `<span class="best-ch-badge ${cls}" title="${escHtml(b.reason||'')}">ch${escHtml(b.channel)}${i===0?" ★":""}${dfs}</span>`;
     }).join("");
 }
 
@@ -185,10 +185,10 @@ function renderRecommendations(recs) {
   if (!recs?.length) return;
   const el = document.getElementById("recs-list");
   el.innerHTML = recs.map(r => `
-    <div class="rec-item ${r.level||''}">
-      <span class="rec-band">${r.band}</span>
-      <span class="rec-action">${r.action}</span>
-      <span class="rec-detail">${r.value} — ${r.detail}</span>
+    <div class="rec-item ${escHtml(r.level||'')}">
+      <span class="rec-band">${escHtml(r.band)}</span>
+      <span class="rec-action">${escHtml(r.action)}</span>
+      <span class="rec-detail">${escHtml(r.value)} — ${escHtml(r.detail)}</span>
     </div>`).join("");
 }
 
@@ -196,11 +196,11 @@ function updateReportPreview(analysis) {
   const el = document.getElementById("rp-content");
   if (!el) return;
   const s = analysis.summary || {};
-  const recs = (analysis.recommendations||[]).map(r => `<li>${r.band} ${r.action}：${r.value}</li>`).join("");
+  const recs = (analysis.recommendations||[]).map(r => `<li>${escHtml(r.band)} ${escHtml(r.action)}：${escHtml(r.value)}</li>`).join("");
   el.innerHTML = `
-    <p><strong>偵測到 ${s.total_networks||0} 個鄰近網路</strong>
-       （2.4G：${(s.bands||{})["2.4GHz"]||0}、5G：${(s.bands||{})["5GHz"]||0}、6G：${(s.bands||{})["6GHz"]||0}）</p>
-    <p style="margin-top:6px">同頻干擾熱區：${s.co_channel_hotspots||0} | Wi-Fi 7：${s.has_wifi7_candidate?"是":"否"} | 6GHz：${s.has_6ghz?"是":"否"}</p>
+    <p><strong>偵測到 ${escHtml(s.total_networks||0)} 個鄰近網路</strong>
+       （2.4G：${escHtml((s.bands||{})["2.4GHz"]||0)}、5G：${escHtml((s.bands||{})["5GHz"]||0)}、6G：${escHtml((s.bands||{})["6GHz"]||0)}）</p>
+    <p style="margin-top:6px">同頻干擾熱區：${escHtml(s.co_channel_hotspots||0)} | Wi-Fi 7：${s.has_wifi7_candidate?"是":"否"} | 6GHz：${s.has_6ghz?"是":"否"}</p>
     ${recs ? `<ul style="margin-top:10px;padding-left:16px;line-height:2">${recs}</ul>` : ""}
   `;
 }

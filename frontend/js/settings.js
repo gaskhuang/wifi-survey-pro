@@ -97,7 +97,9 @@
     post("/api/settings", { privacy: { plaintext_logs: e.target.checked } })
       .then(() => setStatus("已更新隱私設定 ✓")));
 
-  document.querySelector('.nav-item[data-tab="settings"]')
-    ?.addEventListener("click", () => { if (!_loaded) load(); });
-  load();
+  // 延遲載入：第一次開啟設定分頁才抓 /api/settings（失敗時下次開啟再重試）
+  window.addEventListener("tab:activated", e => {
+    if (e.detail?.tab === "settings" && !_loaded) load();
+  });
+  if ($("tab-settings")?.classList.contains("active")) load();
 })();

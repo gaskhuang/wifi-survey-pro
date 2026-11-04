@@ -18,8 +18,33 @@ document.querySelectorAll(".nav-item").forEach(link => {
     document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
     link.classList.add("active");
     document.getElementById(`tab-${tab}`).classList.add("active");
+    // 通知各分頁（延遲初始化 / 切入重繪）
+    window.dispatchEvent(new CustomEvent("tab:activated", { detail: { tab } }));
   });
 });
+
+// 分頁延遲初始化：該分頁第一次被開啟時才執行 fn（若載入時已是可見分頁則立即執行）
+window.onTabFirstActive = (tab, fn) => {
+  if (document.getElementById(`tab-${tab}`)?.classList.contains("active")) { fn(); return; }
+  const h = e => {
+    if (e.detail?.tab !== tab) return;
+    window.removeEventListener("tab:activated", h);
+    fn();
+  };
+  window.addEventListener("tab:activated", h);
+};
+
+// fetch + JSON + 逾時（AbortController），避免單一卡住的請求拖垮鏈式輪詢
+window.fetchJSON = async (url, opts = {}, timeoutMs = 10000) => {
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { ...opts, signal: ac.signal });
+    return await r.json();
+  } finally {
+    clearTimeout(to);
+  }
+};
 
 // ── Band support detection ────────────────────────────────────────────────────
 async function checkBandSupport() {
@@ -48,7 +73,7 @@ async function loadInterfaces() {
     const d = await r.json();
     const ifaces = d.interfaces || [];
     sel.innerHTML = ifaces.map(i =>
-      `<option value="${i.name}">${i.name}${i.default ? " (預設)" : ""}${!i.active ? " ✗" : ""}</option>`
+      `<option value="${escHtml(i.name)}">${escHtml(i.name)}${i.default ? " (預設)" : ""}${!i.active ? " ✗" : ""}</option>`
     ).join("");
     if (ifaces.length <= 1) {
       sel.parentElement.style.display = "none"; // 只有一張卡就隱藏
@@ -72,13 +97,49 @@ document.getElementById("iface-select")?.addEventListener("change", async e => {
 loadInterfaces();
 
 // ── Current connection poller ─────────────────────────────────────────────────
-async function pollConnection() {
-  try {
-    const r = await fetch("/api/current");
-    const d = await r.json();
-    updateConnBadge(d);
-  } catch (_) {}
+// 單一鏈式 setTimeout：上一次回來才排下一次（不重疊）、8 秒逾時、視窗隱藏時暫停。
+// 結果發布到 APP.current 並廣播 "conn:update"，其他模組不必各自再打 /api/current。
+const CONN_POLL_MS    = 5000;
+const CONN_TIMEOUT_MS = 8000;
+APP.current   = null;
+APP.currentTs = 0;
+let _connInflight = null;
+let _connTimer    = null;
+
+function fetchCurrent() {
+  if (_connInflight) return _connInflight;          // in-flight 共用，不重複打
+  _connInflight = fetchJSON("/api/current", {}, CONN_TIMEOUT_MS)
+    .then(d => {
+      APP.current   = d;
+      APP.currentTs = Date.now();
+      updateConnBadge(d);
+      window.dispatchEvent(new CustomEvent("conn:update", { detail: d }));
+      return d;
+    })
+    .finally(() => { _connInflight = null; });
+  return _connInflight;
 }
+// 取目前連線：maxAgeMs 內的快取直接用，否則抓一次（與輪詢共用同一請求）
+window.getCurrentConn = (maxAgeMs = CONN_POLL_MS + 1000) =>
+  (APP.current && Date.now() - APP.currentTs <= maxAgeMs)
+    ? Promise.resolve(APP.current) : fetchCurrent();
+
+function scheduleConnPoll(ms = CONN_POLL_MS) {
+  clearTimeout(_connTimer);
+  _connTimer = document.hidden ? null : setTimeout(pollConnection, ms);
+}
+
+async function pollConnection() {
+  _connTimer = null;
+  if (document.hidden) return;                       // 隱藏時不排程；visible 時再恢復
+  try { await fetchCurrent(); } catch (_) {}
+  scheduleConnPoll();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { clearTimeout(_connTimer); _connTimer = null; }
+  else { clearTimeout(_connTimer); pollConnection(); }   // 回到前景立即更新
+});
 
 function updateConnBadge(d) {
   const badge = document.getElementById("conn-badge");
@@ -109,7 +170,6 @@ function updateConnBadge(d) {
 }
 
 pollConnection();
-setInterval(pollConnection, 5000);
 
 // ── Band filter ───────────────────────────────────────────────────────────────
 function getActiveBands() {
@@ -132,7 +192,7 @@ window.snrColor = snr => {
   if (snr >= 15) return "#f97316";
   return "#ef4444";
 };
-window.escHtml = s => String(s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":'&#39;'})[c]);
+window.escHtml = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":'&#39;'})[c]);
 window.showStatus = (el, msg, isError=false) => {
   el.textContent = msg;
   el.classList.remove("hidden","error");

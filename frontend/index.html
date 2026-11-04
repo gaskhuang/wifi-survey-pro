@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NetInspect Pro</title>
-<script src="js/chart.umd.min.js"></script>
+<script defer src="js/chart.umd.min.js"></script>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -504,6 +504,8 @@
         </div>
       </div>
 
+      <div id="mon-status" class="status-bar hidden"></div>
+
       <div class="cards-row">
         <div class="card"><div class="card-label">即時 RSSI</div><div class="card-val" id="mon-rssi">—</div></div>
         <div class="card"><div class="card-label">SNR</div><div class="card-val" id="mon-snr">—</div></div>
@@ -553,120 +555,6 @@
         <div class="card"><div class="card-label">DNS 解析</div><div class="card-val" id="np-dns-ms">—</div><div class="card-sub" id="np-dns-g">—</div></div>
         <div class="card"><div class="card-label">HTTP TTFB</div><div class="card-val" id="np-http">—</div></div>
       </div>
-
-      <!-- iperf3 section removed — use the dedicated iperf3 tab instead -->
-      <div class="iperf-section" style="display:none">
-
-        <!-- Server panel -->
-        <div class="iperf-panel" id="iperf-server-panel">
-          <div class="iperf-panel-title">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-            iperf3 Server（此台電腦）
-            <span class="iperf-status-dot" id="iperf-srv-dot"></span>
-            <span class="iperf-status-label" id="iperf-srv-label">未啟動</span>
-          </div>
-
-          <div class="iperf-server-body">
-            <div class="iperf-server-left">
-              <div class="iperf-field-row">
-                <label>監聽 Port</label>
-                <input type="number" id="iperf-port" value="5201" min="1024" max="65535" class="text-input" style="width:80px">
-                <button class="iperf-toggle-btn" id="btn-iperf-toggle">
-                  <svg id="iperf-toggle-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  <span id="iperf-toggle-label">啟動 Server</span>
-                </button>
-              </div>
-
-              <div id="iperf-srv-info" class="iperf-srv-info hidden">
-                <div class="iperf-ip-list" id="iperf-ip-list"></div>
-                <div class="iperf-cmd-wrap">
-                  <code class="iperf-cmd" id="iperf-cmd-display">—</code>
-                  <button class="iperf-copy-btn" onclick="copyIperfCmd()">複製</button>
-                </div>
-                <div class="iperf-log-wrap">
-                  <div class="iperf-log-title">Server Log</div>
-                  <div class="iperf-log" id="iperf-log"></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="iperf-qr-panel" id="iperf-qr-panel">
-              <div class="iperf-qr-hint">
-                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="rgba(255,255,255,.2)" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="5" y="5" width="3" height="3" fill="rgba(255,255,255,.2)"/><rect x="16" y="5" width="3" height="3" fill="rgba(255,255,255,.2)"/><rect x="5" y="16" width="3" height="3" fill="rgba(255,255,255,.2)"/><line x1="14" y1="14" x2="14" y2="21"/><line x1="14" y1="14" x2="21" y2="14"/><line x1="21" y1="17" x2="21" y2="21"/><line x1="17" y1="21" x2="21" y2="21"/></svg>
-                <span style="font-size:10px;color:var(--text-3)">啟動 Server 後顯示連線資訊</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Client test panel -->
-        <div class="iperf-panel" id="iperf-client-panel">
-          <div class="iperf-panel-title">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-            iperf3 Client（測試吞吐量）
-          </div>
-
-          <div class="iperf-client-controls">
-            <div class="iperf-field-row">
-              <label>Server IP</label>
-              <input type="text" id="iperf-target" value="192.168.88.234" class="text-input" style="width:140px" placeholder="192.168.x.x">
-            </div>
-            <div class="iperf-field-row">
-              <label>Port</label>
-              <input type="number" id="iperf-client-port" value="5201" class="text-input" style="width:70px">
-            </div>
-            <div class="iperf-field-row">
-              <label>測試時間</label>
-              <select id="iperf-duration" class="select-input">
-                <option value="5">5 秒</option>
-                <option value="10" selected>10 秒</option>
-                <option value="30">30 秒</option>
-                <option value="60">60 秒</option>
-              </select>
-            </div>
-            <div class="iperf-field-row">
-              <label>模式</label>
-              <div class="iperf-mode-group" id="iperf-mode-group">
-                <button class="iperf-mode-btn active" data-mode="tcp_dl">TCP ↓下載</button>
-                <button class="iperf-mode-btn" data-mode="tcp_ul">TCP ↑上傳</button>
-                <button class="iperf-mode-btn" data-mode="tcp_bidir">TCP ↕雙向</button>
-                <button class="iperf-mode-btn" data-mode="udp">UDP</button>
-              </div>
-            </div>
-            <div class="iperf-field-row">
-              <label>並行串流</label>
-              <select id="iperf-streams" class="select-input">
-                <option value="1" selected>1</option>
-                <option value="2">2</option>
-                <option value="4">4</option>
-                <option value="8">8</option>
-              </select>
-            </div>
-            <button class="btn btn-success" id="btn-iperf-run" style="margin-top:6px">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              執行測試
-            </button>
-          </div>
-
-          <!-- iperf result cards -->
-          <div class="iperf-result-cards hidden" id="iperf-result-cards">
-            <div class="iperf-rcard" id="iperf-rc-dl"><div class="iperf-rcard-label">下載</div><div class="iperf-rcard-val" id="iperf-dl">—</div></div>
-            <div class="iperf-rcard" id="iperf-rc-ul" style="display:none"><div class="iperf-rcard-label">上傳</div><div class="iperf-rcard-val" id="iperf-ul">—</div></div>
-            <div class="iperf-rcard"><div class="iperf-rcard-label">Retransmits</div><div class="iperf-rcard-val" id="iperf-retrans">—</div></div>
-            <div class="iperf-rcard" id="iperf-rc-udp" style="display:none"><div class="iperf-rcard-label">UDP Jitter</div><div class="iperf-rcard-val" id="iperf-jitter">—</div></div>
-            <div class="iperf-rcard" id="iperf-rc-loss" style="display:none"><div class="iperf-rcard-label">封包遺失</div><div class="iperf-rcard-val" id="iperf-pkt-loss">—</div></div>
-          </div>
-
-          <!-- Throughput chart -->
-          <div id="iperf-chart-wrap" class="hidden" style="padding:8px 0 0">
-            <div class="section-title">每秒吞吐量</div>
-            <div style="height:160px;position:relative">
-              <canvas id="iperf-chart"></canvas>
-            </div>
-          </div>
-        </div>
-
-      </div><!-- /iperf-section -->
 
       <!-- Ping / DNS history chart -->
       <div class="chart-section">
@@ -1098,24 +986,24 @@
   </main>
 </div>
 
-<script src="js/app.js"></script>
-<script src="js/i18n.js"></script>
-<script src="js/reco.js"></script>
-<script src="js/settings.js"></script>
-<script src="js/lan.js"></script>
-<script src="js/traffic.js"></script>
-<script src="js/diag.js"></script>
-<script src="js/spectrum.js"></script>
-<script src="js/scanner.js"></script>
-<script src="js/channels.js"></script>
-<script src="js/heatmap.js"></script>
-<script src="js/monitor.js"></script>
-<script src="js/netperf.js"></script>
-<script src="js/iperf3tab.js"></script>
-<script src="js/report.js"></script>
-<script src="js/fulltest.js"></script>
-<script src="js/spectrumtab.js"></script>
-<script src="js/stability.js"></script>
-<script src="js/diagnose.js"></script>
+<script defer src="js/app.js"></script>
+<script defer src="js/i18n.js"></script>
+<script defer src="js/reco.js"></script>
+<script defer src="js/settings.js"></script>
+<script defer src="js/lan.js"></script>
+<script defer src="js/traffic.js"></script>
+<script defer src="js/diag.js"></script>
+<script defer src="js/spectrum.js"></script>
+<script defer src="js/scanner.js"></script>
+<script defer src="js/channels.js"></script>
+<script defer src="js/heatmap.js"></script>
+<script defer src="js/monitor.js"></script>
+<script defer src="js/netperf.js"></script>
+<script defer src="js/iperf3tab.js"></script>
+<script defer src="js/report.js"></script>
+<script defer src="js/fulltest.js"></script>
+<script defer src="js/spectrumtab.js"></script>
+<script defer src="js/stability.js"></script>
+<script defer src="js/diagnose.js"></script>
 </body>
 </html>

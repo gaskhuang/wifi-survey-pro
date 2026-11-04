@@ -211,10 +211,10 @@ function addMeasurementRow(pt) {
   div.dataset.id = pt.id;
   const sc = pt.station_count != null ? ` ↔${pt.station_count}` : "";
   div.innerHTML = `
-    <span class="mi-id">#${pt.id+1}</span>
-    <span class="mi-rssi" style="color:${pt.color||rssiToColor(pt.rssi)}">${pt.rssi}dBm${sc}</span>
-    <span style="color:var(--text-3);font-size:9px">${pt.label}</span>
-    <span class="mi-del" onclick="delPoint(${pt.id})">✕</span>`;
+    <span class="mi-id">#${escHtml(pt.id+1)}</span>
+    <span class="mi-rssi" style="color:${escHtml(pt.color||rssiToColor(pt.rssi))}">${escHtml(pt.rssi)}dBm${escHtml(sc)}</span>
+    <span style="color:var(--text-3);font-size:9px">${escHtml(pt.label)}</span>
+    <span class="mi-del" onclick="delPoint(${Number(pt.id)})">✕</span>`;
   list.appendChild(div);
 }
 

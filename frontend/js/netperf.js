@@ -20,8 +20,8 @@ async function runNetperf() {
   showStatus(stat, `正在測試 Ping(${host}) / DNS(${dns}) / HTTP… (${n} 次)`);
 
   try {
-    const r = await fetch(`/api/netperf?host=${encodeURIComponent(host)}&dns=${encodeURIComponent(dns)}&n=${n}`, { timeout: 35000 });
-    const d = await r.json();
+    // fetch 沒有 timeout 選項（原本的 { timeout } 無效）→ 用 AbortController 版本
+    const d = await fetchJSON(`/api/netperf?host=${encodeURIComponent(host)}&dns=${encodeURIComponent(dns)}&n=${encodeURIComponent(n)}`, {}, 35000);
 
     // Update cards
     updateCard("np-ping",   "np-ping-g",  d.ping_ms,  "ms", d.ping_grade,  pingColor(d.ping_ms));
@@ -30,11 +30,12 @@ async function runNetperf() {
     updateCard("np-dns-ms", "np-dns-g",   d.dns_ms,   "ms", d.dns_grade,   dnsColor(d.dns_ms));
     updateCard("np-http",   null,          d.http_ms,  "ms", null,          httpColor(d.http_ms));
 
-    // Push to history
-    if (d.ping_ms != null) npHistory.ping.push(d.ping_ms);
-    if (d.dns_ms  != null) npHistory.dns.push(d.dns_ms);
-    if (d.http_ms != null) npHistory.http.push(d.http_ms);
-    if (npHistory.ping.length > MAX_HIST) { npHistory.ping.shift(); npHistory.dns.shift(); npHistory.http.shift(); }
+    // Push to history：三條序列每次都 push（缺值補 null → 圖上留空），保持對齊並一起截斷
+    npHistory.ping.push(d.ping_ms ?? null);
+    npHistory.dns.push(d.dns_ms   ?? null);
+    npHistory.http.push(d.http_ms ?? null);
+    for (const k of Object.keys(npHistory))
+      if (npHistory[k].length > MAX_HIST) npHistory[k].splice(0, npHistory[k].length - MAX_HIST);
 
     updateNpChart();
 

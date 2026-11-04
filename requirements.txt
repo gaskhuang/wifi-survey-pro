@@ -1,31 +1,36 @@
-# NetInspect Pro v2.1 — macOS dependencies
-# Python 3.10+ required
+# NetInspect Pro — macOS 執行期相依（完整鎖定＝開發環境實測過的組合，確保每次打包一致）
+# Python 3.13；只支援 Apple Silicon、macOS 15+
+# 已移除：scipy（97 MB，只為一個線性 RBF，已改純 numpy）、
+#         mac-vendor-lookup（廠牌改讀內建 data/oui.txt，連帶省下 aiohttp/yarl/multidict 等約 7 MB）
 
-# Core Wi-Fi scanning (macOS CoreWLAN)
-pyobjc-framework-CoreWLAN>=10.0
+# ── Wi-Fi 掃描（CoreWLAN）+ 原生視窗（pywebview / WebKit）────────────────
+pyobjc-core==12.2
+pyobjc-framework-Cocoa==12.2
+pyobjc-framework-CoreWLAN==12.2
+pyobjc-framework-Quartz==12.2
+pyobjc-framework-Security==12.2
+pyobjc-framework-UniformTypeIdentifiers==12.2
+pyobjc-framework-WebKit==12.2
+pywebview==6.2.1
+bottle==0.13.4
+proxy_tools==0.1.0
+typing_extensions==4.15.0
 
-# Web server
-flask>=3.0
+# ── Web server ───────────────────────────────────────────────────────────
+flask==3.1.3
+werkzeug==3.1.8
+jinja2==3.1.6
+markupsafe==3.0.3
+itsdangerous==2.2.0
+click==8.4.1
+blinker==1.9.0
 
-# Image processing (heatmap)
-Pillow>=10.0
-numpy>=1.26
+# ── 熱圖 / PDF ───────────────────────────────────────────────────────────
+numpy==2.4.6
+pillow==12.2.0
+reportlab==4.5.1
+charset-normalizer==3.4.7
 
-# Heatmap interpolation (RBF — replaces IDW)
-scipy>=1.12
-
-# PDF report
-reportlab>=4.2
-
-# OUI vendor lookup (BSSID → manufacturer)
-mac-vendor-lookup>=0.1.12
-
-# Network performance testing
-ping3>=4.0
-dnspython>=2.4
-
-# Native window (optional but recommended)
-pywebview>=5.0
-
-# Installed on demand by mac-vendor-lookup
-# aiohttp, yarl, frozenlist, multidict
+# ── 網路效能 / DNS ───────────────────────────────────────────────────────
+ping3==5.1.5
+dnspython==2.8.0

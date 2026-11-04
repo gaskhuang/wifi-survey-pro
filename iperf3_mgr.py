@@ -5,26 +5,29 @@ Wraps the system iperf3 binary (no Python lib required)
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from typing import Optional
 
 # ─── Regex patterns for iperf3 non-JSON output ────────────────────────────────
-# Rate unit can be Kbits/sec, Mbits/sec, Gbits/sec
-_RE_RATE = r'([\d.]+)\s+([KMG])bits/sec'
-
-_RE_TCP = re.compile(
-    r'\[\s*\d+\]\s+([\d.]+)-([\d.]+)\s+sec\s+[\d.]+ \S+\s+' + _RE_RATE +
-    r'(?:\s+(\d+))?'
+# 一行區間/摘要：[  5] 或 [SUM]，--bidir 另帶 [TX-C]/[RX-C] 角色標籤；速率單位可無前綴
+_RE_LINE = re.compile(
+    r'\[\s*(\d+|SUM)\](?:\[(TX|RX)-[CS]\])?\s+([\d.]+)-([\d.]+)\s+sec\s+'
+    r'[\d.]+ \S+\s+([\d.]+)\s+([KMG]?)bits/sec(.*)$'
 )
-_RE_UDP = re.compile(
-    r'\[\s*\d+\]\s+([\d.]+)-([\d.]+)\s+sec\s+[\d.]+ \S+\s+' + _RE_RATE +
-    r'\s+([\d.]+) ms\s+(\d+)/(\d+) \(([\d.]+)%\)'
-)
+_RE_UDP_TAIL = re.compile(r'([\d.]+) ms\s+(\d+)/(\d+)\s+\(([\d.e+-]+)%\)')
 _RE_SUMMARY_SENDER   = re.compile(r'sender',   re.IGNORECASE)
 _RE_SUMMARY_RECEIVER = re.compile(r'receiver', re.IGNORECASE)
+
+# 參數範圍（避免前端/API 傳入極端值：超長測試、上百條串流）
+MIN_DURATION, MAX_DURATION = 1, 120
+MIN_STREAMS,  MAX_STREAMS  = 1, 16
+DEFAULT_UDP_BW = "100M"          # UDP 未指定頻寬時的預設值（-b 0 會灌爆客戶 LAN）
+_RE_BW = re.compile(r'^\d+(?:\.\d+)?[KMGkmg]?$')
 
 
 def _to_mbps(val: str, unit: str) -> float:
@@ -32,7 +35,23 @@ def _to_mbps(val: str, unit: str) -> float:
     v = float(val)
     if unit == "G": return round(v * 1000, 2)
     if unit == "K": return round(v / 1000, 3)
+    if unit == "":  return round(v / 1e6, 6)
     return round(v, 2)  # already Mbps
+
+
+def _clamp(v, lo, hi, default):
+    try:
+        return max(lo, min(hi, int(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _udp_bw(bandwidth) -> str:
+    """呼叫端有給（且格式合法）就沿用，否則預設 100M。"""
+    if bandwidth is None:
+        return DEFAULT_UDP_BW
+    b = str(bandwidth).strip()
+    return b if _RE_BW.match(b) else DEFAULT_UDP_BW
 
 IPERF3_BIN   = "/usr/local/bin/iperf3"   # macOS Homebrew default
 DEFAULT_PORT = 5201
@@ -50,6 +69,125 @@ def _find_binary() -> str:
     except Exception:
         pass
     return ""
+
+
+_FLUSH_CACHE = {}
+
+
+def _flush_args(binary: str) -> list:
+    """iperf3 ≥ 3.1 支援 --forceflush：stdout 接 pipe 時預設是區塊緩衝，
+    不加的話「即時」區間行會全部擠到測試結束才一次吐出。"""
+    if binary not in _FLUSH_CACHE:
+        ok = False
+        try:
+            out = subprocess.run([binary, "--version"], capture_output=True,
+                                 text=True, timeout=3).stdout
+            m = re.search(r'iperf\s+(\d+)\.(\d+)', out)
+            ok = bool(m) and (int(m.group(1)), int(m.group(2))) >= (3, 1)
+        except Exception:
+            ok = False
+        _FLUSH_CACHE[binary] = ok
+    return ["--forceflush"] if _FLUSH_CACHE[binary] else []
+
+
+# ─── 進行中的 client 子程序（供 stop_all 收尾）────────────────────────────────
+_CLIENTS: set = set()
+_CLIENTS_LOCK = threading.Lock()
+
+
+def _track(proc):
+    with _CLIENTS_LOCK:
+        _CLIENTS.add(proc)
+
+
+def _untrack(proc):
+    with _CLIENTS_LOCK:
+        _CLIENTS.discard(proc)
+
+
+def _terminate(proc, wait_s: float = 2.0):
+    """terminate → wait → kill，確保不留下佔 CPU 的孤兒 iperf3。"""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=wait_s)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+
+
+# ─── Server PID 檔（Cmd+Q 不走 atexit，下次啟動時清掉上次遺留的 iperf3 -s）────────
+def _pidfile_path() -> str:
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support/NetInspectPro")
+    elif sys.platform.startswith("win"):
+        base = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "NetInspectPro")
+    else:
+        base = os.path.expanduser("~/.config/NetInspectPro")
+    return os.path.join(base, "iperf3.pid")
+
+
+PIDFILE = _pidfile_path()
+
+
+def _write_pidfile(pid: int):
+    try:
+        os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
+        with open(PIDFILE, "w") as f:
+            f.write(str(pid))
+    except Exception:
+        pass
+
+
+def _remove_pidfile():
+    try:
+        os.remove(PIDFILE)
+    except Exception:
+        pass
+
+
+def _pid_is_iperf3(pid: int) -> bool:
+    """PID 存活且命令列為 iperf3（避免 PID 被系統重用後誤殺其他程序）。"""
+    if pid <= 0 or pid == os.getpid():
+        return False
+    if sys.platform.startswith("win"):
+        return False                  # 無可靠的命令列查詢，寧可不殺
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:
+        cmd = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "command="],
+                             capture_output=True, text=True, timeout=3).stdout.strip()
+    except Exception:
+        return False
+    return "iperf3" in os.path.basename(cmd.split()[0]) if cmd else False
+
+
+def _kill_stale_server() -> Optional[int]:
+    """若 PID 檔指向仍存活的 iperf3，先結束它；回傳被清掉的 PID。"""
+    try:
+        with open(PIDFILE) as f:
+            pid = int(f.read().strip() or 0)
+    except Exception:
+        return None
+    killed = None
+    if _pid_is_iperf3(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(20):
+                time.sleep(0.1)
+                os.kill(pid, 0)
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        killed = pid
+    _remove_pidfile()
+    return killed
 
 
 def check_installed() -> dict:
@@ -104,9 +242,12 @@ class IperfServer:
 
             self._port = port
             self._log  = []
+            stale = _kill_stale_server()        # 上次 App 未正常結束遺留的 iperf3 -s
+            if stale:
+                self._log.append(f"[NetInspect] 已結束上次遺留的 iperf3 server（PID {stale}）")
             try:
                 self._proc = subprocess.Popen(
-                    [binary, "-s", "-p", str(port)],
+                    [binary, "-s", "-p", str(port)] + _flush_args(binary),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -116,6 +257,7 @@ class IperfServer:
                 if self._proc.poll() is not None:
                     out = self._proc.stdout.read()
                     return {"ok": False, "error": f"Server exited: {out}"}
+                _write_pidfile(self._proc.pid)
 
                 # Background log reader
                 threading.Thread(target=self._read_log, daemon=True).start()
@@ -133,16 +275,12 @@ class IperfServer:
     def stop(self) -> dict:
         with self._lock:
             if not self._proc or self._proc.poll() is not None:
+                self._proc = None
+                _remove_pidfile()
                 return {"ok": True, "message": "Server not running"}
-            try:
-                self._proc.terminate()
-                self._proc.wait(timeout=3)
-            except Exception:
-                try:
-                    self._proc.kill()
-                except Exception:
-                    pass
+            _terminate(self._proc, 3)
             self._proc = None
+            _remove_pidfile()
             return {"ok": True}
 
     def status(self) -> dict:
@@ -166,37 +304,43 @@ class IperfServer:
 
 
 # ─── Client test ──────────────────────────────────────────────────────────────
+def _client_cmd(binary, target, port, duration, mode, streams, bandwidth) -> list:
+    cmd = [binary, "-c", target, "-p", str(port),
+           "-t", str(duration), "-P", str(streams)]
+    if mode == "tcp_dl":
+        cmd += ["-R"]                              # reverse = download
+    elif mode == "tcp_bidir":
+        cmd += ["--bidir"]
+    elif mode == "udp":
+        cmd += ["-u", "-b", _udp_bw(bandwidth)]    # 預設 100M；-b 0（無上限）會灌爆客戶 LAN
+    return cmd
+
+
 def run_test(target: str, port: int = DEFAULT_PORT,
              duration: int = 10, mode: str = "tcp_dl",
-             streams: int = 1) -> dict:
+             streams: int = 1, bandwidth: Optional[str] = None) -> dict:
     """
     mode: "tcp_dl" | "tcp_ul" | "tcp_bidir" | "udp"
+    bandwidth: UDP 目標頻寬（如 "50M"），None → 100M
     Returns structured result with intervals and summary.
     """
     binary = _find_binary()
     if not binary:
         return {"ok": False, "error": "iperf3 not found"}
 
-    cmd = [binary, "-c", target, "-p", str(port),
-           "-t", str(duration), "-J",              # JSON output
-           "-P", str(streams)]                      # parallel streams
+    duration = _clamp(duration, MIN_DURATION, MAX_DURATION, 10)
+    streams  = _clamp(streams, MIN_STREAMS, MAX_STREAMS, 1)
+    cmd = _client_cmd(binary, target, port, duration, mode, streams, bandwidth) + ["-J"]
 
-    if mode == "tcp_dl":
-        cmd += ["-R"]                              # reverse = download
-    elif mode == "tcp_bidir":
-        cmd += ["--bidir"]
-    elif mode == "udp":
-        cmd += ["-u", "-b", "0"]                   # UDP unlimited bandwidth
-
+    proc = None
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=duration + 15
-        )
-        raw = proc.stdout.strip()
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        _track(proc)
+        out, err = proc.communicate(timeout=duration + 15)
+        raw = (out or "").strip()
         if not raw:
-            err = proc.stderr.strip()
-            return {"ok": False, "error": err or "No output from iperf3"}
+            return {"ok": False, "error": (err or "").strip() or "No output from iperf3"}
 
         data = json.loads(raw)
         return _parse_result(data, mode)
@@ -207,6 +351,9 @@ def run_test(target: str, port: int = DEFAULT_PORT,
         return {"ok": False, "error": f"JSON parse error: {e}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+    finally:
+        _terminate(proc)
+        _untrack(proc)
 
 
 def _parse_result(data: dict, mode: str) -> dict:
@@ -227,7 +374,7 @@ def _parse_result(data: dict, mode: str) -> dict:
 
     # ── Summary ────────────────────────────────────────────────────────────
     if mode == "udp":
-        s = end.get("sum", {})
+        s = end.get("sum_received") or end.get("sum", {})   # 接收端統計才有 jitter/遺失
         mbps       = round(s.get("bits_per_second", 0) / 1e6, 2)
         jitter_ms  = round(s.get("jitter_ms", 0), 3)
         lost_pct   = round(s.get("lost_percent", 0), 2)
@@ -278,22 +425,51 @@ def _parse_result(data: dict, mode: str) -> dict:
 
 
 # ─── Streaming test (non-JSON, line-by-line) ──────────────────────────────────
-def stream_test(target: str, port: int, duration: int, mode: str, streams: int):
+def _parse_line(line: str, streams: int):
+    """解析一行區間/摘要。回傳 dict 或 None。
+    多串流（-P>1）只採 [SUM] 列，單串流只採 [ id ] 列，避免同一秒被重複計算。"""
+    m = _RE_LINE.search(line)
+    if not m:
+        return None
+    sid, role = m.group(1), m.group(2)
+    if (streams > 1) != (sid == "SUM"):
+        return None
+    tail = m.group(7)
+    d = {
+        "role":    role,                       # None / "TX" / "RX"（--bidir）
+        "t0":      float(m.group(3)),
+        "t1":      float(m.group(4)),
+        "mbps":    _to_mbps(m.group(5), m.group(6)),
+        "summary": "sender" if _RE_SUMMARY_SENDER.search(tail) else
+                   ("receiver" if _RE_SUMMARY_RECEIVER.search(tail) else None),
+    }
+    um = _RE_UDP_TAIL.search(tail)
+    if um:
+        d.update(jitter_ms=float(um.group(1)), lost=int(um.group(2)),
+                 total=int(um.group(3)), lost_pct=float(um.group(4)))
+    else:
+        nm = re.match(r'\s+(\d+)\b', tail)     # TCP：Retr；UDP 送端區間：Total Datagrams
+        d["count"] = int(nm.group(1)) if nm else None
+    return d
+
+
+def stream_test(target: str, port: int, duration: int, mode: str, streams: int,
+                bandwidth: Optional[str] = None):
     """
     Generator — yields (event_type, data_dict).
     Events: "start" | "log" | "interval" | "analysis" | "error"
-    Runs iperf3 without -J so output is real-time line by line.
+    Runs iperf3 without -J so output is real-time line by line (--forceflush).
+    產生器被關閉（SSE 斷線 → GeneratorExit）時於 finally 結束 iperf3 子程序。
     """
     binary = _find_binary()
     if not binary:
         yield "error", {"message": "iperf3 未安裝，請執行: brew install iperf3"}
         return
 
-    cmd = [binary, "-c", target, "-p", str(port),
-           "-t", str(duration), "-P", str(streams), "-i", "1"]
-    if mode == "tcp_dl":    cmd += ["-R"]
-    elif mode == "tcp_bidir": cmd += ["--bidir"]
-    elif mode == "udp":     cmd += ["-u", "-b", "0"]
+    duration = _clamp(duration, MIN_DURATION, MAX_DURATION, 10)
+    streams  = _clamp(streams, MIN_STREAMS, MAX_STREAMS, 1)
+    cmd = (_client_cmd(binary, target, port, duration, mode, streams, bandwidth)
+           + ["-i", "1"] + _flush_args(binary))
 
     yield "start", {
         "cmd":      " ".join(cmd),
@@ -301,63 +477,78 @@ def stream_test(target: str, port: int, duration: int, mode: str, streams: int):
         "duration": duration,
         "target":   target,
         "port":     port,
+        "streams":  streams,
+        "bandwidth": _udp_bw(bandwidth) if mode == "udp" else None,
     }
 
     intervals: list[dict] = []
+    udp_summary: Optional[dict] = None
+    bidir_pending: dict = {}                   # t0 → {"TX": row, "RX": row}
+    proc = None
 
     try:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
-        )
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            _track(proc)
 
-        for raw_line in proc.stdout:
-            line = raw_line.rstrip()
-            yield "log", {"text": line}
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip()
+                yield "log", {"text": line}
 
-            # Skip summary lines (contain "sender" / "receiver")
-            is_summary = bool(_RE_SUMMARY_SENDER.search(line) or _RE_SUMMARY_RECEIVER.search(line))
+                p = _parse_line(line, streams)
+                if not p:
+                    continue
+                if p["summary"]:
+                    # UDP：client 是送端，區間列沒有 jitter/遺失；改取測試結束時的「receiver」摘要
+                    if mode == "udp" and p["summary"] == "receiver" and "jitter_ms" in p:
+                        udp_summary = p
+                    continue
+                if p["t1"] - p["t0"] > 1.5:
+                    continue
 
-            if mode == "udp":
-                m = _RE_UDP.search(line)
-                if m and not is_summary:
-                    t_start, t_end = float(m.group(1)), float(m.group(2))
-                    if t_end - t_start <= 1.5:
-                        iv = {
-                            "t":         round(t_start, 1),
-                            "mbps":      _to_mbps(m.group(3), m.group(4)),
-                            "jitter_ms": float(m.group(5)),
-                            "lost":      int(m.group(6)),
-                            "total":     int(m.group(7)),
-                            "lost_pct":  float(m.group(8)),
-                        }
-                        intervals.append(iv)
-                        yield "interval", iv
-            else:
-                m = _RE_TCP.search(line)
-                if m and not is_summary:
-                    t_start, t_end = float(m.group(1)), float(m.group(2))
-                    if t_end - t_start <= 1.5:
-                        iv = {
-                            "t":    round(t_start, 1),
-                            "mbps": _to_mbps(m.group(3), m.group(4)),
-                            "retr": int(m.group(5)) if m.group(5) else 0,
-                        }
-                        intervals.append(iv)
-                        yield "interval", iv
+                if mode == "udp":
+                    iv = {"t": round(p["t0"], 1), "mbps": p["mbps"],
+                          "datagrams": p.get("count") or 0}
+                elif mode == "tcp_bidir":
+                    # 同一秒的 TX/RX 兩列合併成一筆：mbps = 雙向合計
+                    if not p["role"]:
+                        continue
+                    slot = bidir_pending.setdefault(round(p["t0"], 1), {})
+                    slot[p["role"]] = p
+                    if len(slot) < 2:
+                        continue
+                    t = round(p["t0"], 1)
+                    bidir_pending.pop(t, None)
+                    tx, rx = slot["TX"], slot["RX"]
+                    iv = {"t": t, "mbps": round(tx["mbps"] + rx["mbps"], 2),
+                          "tx_mbps": tx["mbps"], "rx_mbps": rx["mbps"],
+                          "retr": tx.get("count") or 0}
+                else:
+                    iv = {"t": round(p["t0"], 1), "mbps": p["mbps"],
+                          "retr": p.get("count") or 0}
+                intervals.append(iv)
+                yield "interval", iv
 
-        proc.wait()
+            proc.wait(timeout=5)
 
-    except Exception as e:
-        yield "error", {"message": str(e)}
-        return
+        except Exception as e:
+            yield "error", {"message": str(e)}
+            return
 
-    # ── Post-test analysis ────────────────────────────────────────────────────
-    analysis = _build_analysis(intervals, mode, duration)
-    yield "analysis", analysis
+        # ── Post-test analysis ────────────────────────────────────────────────
+        analysis = _build_analysis(intervals, mode, duration, udp_summary)
+        yield "analysis", analysis
+    finally:
+        # 不論正常結束、例外或 GeneratorExit（客戶端關閉 SSE）都收掉子程序
+        _terminate(proc)
+        _untrack(proc)
 
 
-def _build_analysis(intervals: list, mode: str, duration: int) -> dict:
+def _build_analysis(intervals: list, mode: str, duration: int,
+                    udp_summary: Optional[dict] = None) -> dict:
     if not intervals:
         return {"ok": False, "error": "未擷取到任何區間資料，請確認 server 端正在運行。"}
 
@@ -378,14 +569,30 @@ def _build_analysis(intervals: list, mode: str, duration: int) -> dict:
     }
 
     if mode == "udp":
-        j_list = [iv["jitter_ms"] for iv in intervals]
-        l_list = [iv["lost_pct"]  for iv in intervals]
-        result["avg_jitter_ms"] = round(sum(j_list)/len(j_list), 3) if j_list else 0
-        result["avg_lost_pct"]  = round(sum(l_list)/len(l_list), 2) if l_list else 0
-        result["total_lost"]    = sum(iv["lost"] for iv in intervals)
-        result["total_pkts"]    = sum(iv["total"] for iv in intervals)
+        # 方向不變（client→server 上傳）；區間為送端速率，jitter/遺失取 server 回報的接收端摘要
+        result["offered_mbps"] = avg
+        result["udp_summary"] = bool(udp_summary)
+        if udp_summary:
+            result["receiver_mbps"] = round(udp_summary["mbps"], 1)
+            result["avg_mbps"]      = result["receiver_mbps"]    # 實際送達的速率
+            result["avg_jitter_ms"] = round(udp_summary["jitter_ms"], 3)
+            result["avg_lost_pct"]  = round(udp_summary["lost_pct"], 2)
+            result["total_lost"]    = udp_summary["lost"]
+            result["total_pkts"]    = udp_summary["total"]
+        else:
+            result["avg_jitter_ms"] = None
+            result["avg_lost_pct"]  = None
+            result["total_lost"]    = None
+            result["total_pkts"]    = sum(iv.get("datagrams", 0) for iv in intervals)
+            result["note"] = "未取得接收端摘要（server 可能中途中斷），無法計算 jitter/遺失率。"
+        avg = result["avg_mbps"]
     else:
         result["total_retransmits"] = sum(iv.get("retr", 0) for iv in intervals)
+        if mode == "tcp_bidir":
+            tx = [iv.get("tx_mbps", 0) for iv in intervals]
+            rx = [iv.get("rx_mbps", 0) for iv in intervals]
+            result["avg_tx_mbps"] = round(sum(tx) / len(tx), 1)
+            result["avg_rx_mbps"] = round(sum(rx) / len(rx), 1)
 
     result["speed_tier"]  = _speed_tier(avg)
     result["ratings"]     = _ratings(result, mode)
@@ -419,14 +626,14 @@ def _ratings(r: dict, mode: str) -> dict:
     elif cv < 30: ratings["stability"] = {"label":"略有波動","color":"#eab308","score":50}
     else:         ratings["stability"] = {"label":"不穩定","color":"#ef4444","score":25}
 
-    if mode == "udp":
+    if mode == "udp" and r.get("avg_jitter_ms") is not None:
         jitter = r.get("avg_jitter_ms", 999)
         loss   = r.get("avg_lost_pct", 100)
         if   jitter < 1  and loss < 0.01: ratings["udp"] = {"label":"VoIP 優異","color":"#22c55e","score":100}
         elif jitter < 5  and loss < 0.5:  ratings["udp"] = {"label":"VoIP 可用","color":"#84cc16","score":75}
         elif jitter < 20 and loss < 2:    ratings["udp"] = {"label":"串流可用","color":"#eab308","score":50}
         else:                             ratings["udp"] = {"label":"品質差","color":"#ef4444","score":20}
-    else:
+    elif mode != "udp":
         retr = r.get("total_retransmits", 0)
         if   retr == 0:  ratings["tcp"] = {"label":"無重傳 ✓","color":"#22c55e","score":100}
         elif retr < 10:  ratings["tcp"] = {"label":"輕微重傳","color":"#84cc16","score":75}
@@ -491,7 +698,7 @@ def _recommendations(r: dict, mode: str) -> list[dict]:
         elif retr == 0:
             recs.append({"level":"good","icon":"🟢","text":"TCP 零重傳，連線穩定可靠。"})
 
-    if mode == "udp":
+    if mode == "udp" and r.get("avg_jitter_ms") is not None:
         jitter = r.get("avg_jitter_ms", 0)
         loss   = r.get("avg_lost_pct", 0)
         if jitter > 20:
@@ -512,3 +719,26 @@ _server = IperfServer()
 
 def get_server() -> IperfServer:
     return _server
+
+
+def stop_all() -> dict:
+    """結束所有本模組啟動的 iperf3（server + 進行中的 client）並移除 PID 檔。
+    供視窗關閉 hook / atexit 呼叫；可重複呼叫。"""
+    with _CLIENTS_LOCK:
+        procs = list(_CLIENTS)
+    for p in procs:
+        _terminate(p, 1.5)
+        _untrack(p)
+    _server.stop()
+    return {"ok": True, "clients_stopped": len(procs)}
+
+
+cleanup = stop_all          # 別名
+
+
+def cleanup_stale() -> Optional[int]:
+    """App 啟動時可呼叫：結束 PID 檔指向的上次遺留 iperf3 -s；回傳被清掉的 PID 或 None。
+    （server.start() 本身也會先做這件事）"""
+    if _server._proc is not None and _server._proc.poll() is None:
+        return None             # 本行程自己的 server 正在跑，不動
+    return _kill_stale_server()

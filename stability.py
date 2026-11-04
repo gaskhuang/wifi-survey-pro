@@ -57,6 +57,7 @@ class _PingWorker(threading.Thread):
         self.samples: list[dict] = []   # {"t": sec, "ms": float|None}
         self._lock    = threading.Lock()
         self._proc    = None
+        self._killed  = False           # terminate() 可能早於 Popen，需記住
 
     def run(self):
         count = max(self.duration, 1)
@@ -66,9 +67,12 @@ class _PingWorker(threading.Thread):
             cmd = ["ping", "-i", "1", "-c", str(count), self.host]
         t0 = time.time()
         try:
-            self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, errors="replace")
+            with self._lock:
+                if self._killed:
+                    return
+                self._proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    text=True, errors="replace")
             for line in self._proc.stdout:
                 el = round(time.time() - t0, 1)
                 m  = _TIME_RE.search(line)
@@ -86,9 +90,12 @@ class _PingWorker(threading.Thread):
             self.samples.append(s)
 
     def terminate(self):
+        with self._lock:
+            self._killed = True
+            proc = self._proc
         try:
-            if self._proc and self._proc.poll() is None:
-                self._proc.terminate()
+            if proc and proc.poll() is None:
+                proc.terminate()
         except Exception:
             pass
 
@@ -170,78 +177,142 @@ def _grade(score: int) -> dict:
 
 
 # ─── Main test runner ───────────────────────────────────────────────────────
+class _Run:
+    """單次測試的私有狀態。每次 start() 建立新物件，舊迴圈只會寫自己的 _Run，
+    stop→立即 start 時新舊兩輪不會共用 samples / ping worker。"""
+
+    def __init__(self, duration: int, inet_host: str):
+        self.duration  = duration
+        self.inet_host = inet_host
+        self.stop_evt  = threading.Event()
+        self.lock      = threading.Lock()
+        self.samples: list[dict] = []
+        self.events:  list[dict] = []
+        self.gw_worker:   _PingWorker | None = None
+        self.inet_worker: _PingWorker | None = None
+        self.meta: dict = {}
+        self.t0    = time.time()          # start() 當下就定，status() 不會在暖身時算錯
+        self.phase = "starting"           # starting → running → finishing → done
+        self.done  = False
+
+    def workers(self) -> list:
+        return [w for w in (self.gw_worker, self.inet_worker) if w]
+
+    def kill_pings(self):
+        for w in self.workers():
+            w.terminate()
+
+
 class StabilityTest:
     SAMPLE_INTERVAL = 1.0
 
     def __init__(self):
-        self._lock     = threading.Lock()
-        self._running  = False
+        self._ctl_lock = threading.Lock()   # 序列化 start/stop
+        self._run: _Run | None = None
         self._thread   = None
-        self._samples: list[dict] = []
-        self._events:  list[dict] = []
-        self._gw_worker:   _PingWorker | None = None
-        self._inet_worker: _PingWorker | None = None
-        self._t0       = 0.0
-        self._duration = 60
         self.result_data: dict | None = None
+
+    # 相容舊屬性（稽核腳本 / 除錯用）
+    @property
+    def _running(self) -> bool:
+        r, t = self._run, self._thread
+        return bool(r and not r.done and t and t.is_alive())
+
+    @property
+    def _duration(self) -> int:
+        return self._run.duration if self._run else 60
 
     # ── Control ──────────────────────────────────────────────────────────
     def start(self, duration: int = 60, inet_host: str = "8.8.8.8") -> bool:
-        with self._lock:
-            if self._running:
+        with self._ctl_lock:
+            if self._running and not self._run.stop_evt.is_set():
                 return False
-            self._running     = True
-            self._duration    = max(10, min(600, duration))
-            self._samples     = []
-            self._events      = []
-            self.result_data  = None
-        self._thread = threading.Thread(
-            target=self._loop, args=(inet_host,), daemon=True)
-        self._thread.start()
-        return True
+            old = self._thread
+            if old and old.is_alive():
+                # 上一輪剛被 stop：給它一點時間收尾，仍未結束就拒絕，避免兩輪並行
+                if self._run:
+                    self._run.stop_evt.set()
+                    self._run.kill_pings()
+                old.join(timeout=1.5)
+                if old.is_alive():
+                    return False
+            run = _Run(max(10, min(600, duration)), inet_host)
+            self._run = run
+            self.result_data = None
+            self._thread = threading.Thread(
+                target=self._loop, args=(run,), daemon=True, name="stability-test")
+            self._thread.start()
+            return True
 
     def stop(self):
-        self._running = False
+        with self._ctl_lock:
+            run, t = self._run, self._thread
+            if not run:
+                return
+            run.stop_evt.set()
+            run.kill_pings()                   # 立即結束 ping 子程序（不再等 join(8)）
+            if t and t.is_alive() and t is not threading.current_thread():
+                t.join(timeout=2.0)
 
     # ── Status (polled by frontend during test) ─────────────────────────
     def status(self) -> dict:
-        with self._lock:
-            samples = list(self._samples)
-            events  = list(self._events)
-        gw   = self._gw_worker.snapshot()   if self._gw_worker   else []
-        inet = self._inet_worker.snapshot() if self._inet_worker else []
-        elapsed = round(time.time() - self._t0, 1) if self._running else 0
+        run = self._run
+        if run is None:
+            return {"running": False, "elapsed": 0, "duration": 60,
+                    "samples": [], "ping_gw": [], "ping_inet": [], "events": [],
+                    "has_result": self.result_data is not None, "phase": "idle"}
+        with run.lock:
+            samples = list(run.samples)
+            events  = list(run.events)
+        gw   = run.gw_worker.snapshot()   if run.gw_worker   else []
+        inet = run.inet_worker.snapshot() if run.inet_worker else []
+        running = self._running
+        elapsed = round(time.time() - run.t0, 1) if running else 0
         return {
-            "running":  self._running,
-            "elapsed":  min(elapsed, self._duration),
-            "duration": self._duration,
+            "running":  running,
+            "elapsed":  max(0, min(elapsed, run.duration)),
+            "duration": run.duration,
             "samples":  samples,
             "ping_gw":  gw,
             "ping_inet": inet,
             "events":   events,
             "has_result": self.result_data is not None,
+            "phase":    run.phase if running else "done",
         }
 
     # ── Sampling loop ─────────────────────────────────────────────────────
-    def _loop(self, inet_host: str):
-        # 完整連線資訊只抓一次當報告 metadata（內含 system_profiler，較慢）
-        self._meta = scanner.current_connection()
-        self._t0 = time.time()
+    def _loop(self, run: _Run):
+        try:
+            self._loop_inner(run)
+        finally:
+            run.kill_pings()
+            run.done = True
+
+    def _loop_inner(self, run: _Run):
+        evt = run.stop_evt
+        # 完整連線資訊只抓一次當報告 metadata
+        run.meta = scanner.current_connection()
+        if evt.is_set():
+            return
         gw = default_gateway()
 
-        self._gw_worker   = _PingWorker(gw, self._duration) if gw else None
-        self._inet_worker = _PingWorker(inet_host, self._duration)
-        if self._gw_worker:
-            self._gw_worker.start()
-        self._inet_worker.start()
+        run.gw_worker   = _PingWorker(gw, run.duration) if gw else None
+        run.inet_worker = _PingWorker(run.inet_host, run.duration)
+        if evt.is_set():                     # stop() 可能剛好發生在建立 worker 前
+            return
+        for w in run.workers():
+            w.start()
+        if evt.is_set():
+            run.kill_pings()
+        run.phase = "running"
 
         last_bssid   = None
         last_channel = None
         was_conn     = None
 
-        while self._running:
-            el = time.time() - self._t0
-            if el >= self._duration:
+        while not evt.is_set():
+            el = time.time() - run.t0
+            if el >= run.duration:
                 break
             cur  = _fast_sample()
             conn = bool(cur.get("connected"))
@@ -259,18 +330,18 @@ class StabilityTest:
 
             # ── Event detection ──
             if was_conn is True and not conn:
-                self._push_event(el, "disconnect", "Wi-Fi 連線中斷")
+                self._push_event(run, el, "disconnect", "Wi-Fi 連線中斷")
             elif was_conn is False and conn:
-                self._push_event(el, "reconnect", "Wi-Fi 重新連線")
+                self._push_event(run, el, "reconnect", "Wi-Fi 重新連線")
             if conn:
                 bssid = cur.get("bssid") or ""
                 chan  = cur.get("channel")
                 if last_bssid and bssid and bssid != last_bssid:
-                    self._push_event(el, "roam",
+                    self._push_event(run, el, "roam",
                         f"漫遊：{last_bssid} → {bssid}")
                 elif last_bssid == bssid and last_channel and chan \
                         and chan != last_channel:
-                    self._push_event(el, "channel_change",
+                    self._push_event(run, el, "channel_change",
                         f"頻道切換：ch{last_channel} → ch{chan}")
                 if bssid:
                     last_bssid = bssid
@@ -278,32 +349,38 @@ class StabilityTest:
                     last_channel = chan
             was_conn = conn
 
-            with self._lock:
-                self._samples.append(sample)
+            with run.lock:
+                run.samples.append(sample)
+                n = len(run.samples)
 
-            # 對齊取樣間隔（current_connection 本身耗時不定）
-            next_t = self._t0 + (len(self._samples)) * self.SAMPLE_INTERVAL
-            time.sleep(max(0.05, next_t - time.time()))
+            # 對齊取樣間隔；用 Event.wait 讓 stop() 能立即喚醒
+            next_t = run.t0 + n * self.SAMPLE_INTERVAL
+            evt.wait(max(0.05, next_t - time.time()))
 
-        # 等 ping 收尾
-        if self._gw_worker:
-            self._gw_worker.join(timeout=8)
-            self._gw_worker.terminate()
-        self._inet_worker.join(timeout=8)
-        self._inet_worker.terminate()
+        # 等 ping 收尾（正常跑完時最多 8 秒；被 stop 則立即結束）
+        run.phase = "finishing"
+        deadline = time.time() + 8
+        while not evt.is_set() and time.time() < deadline \
+                and any(w.is_alive() for w in run.workers()):
+            evt.wait(0.2)
+        run.kill_pings()
+        for w in run.workers():
+            w.join(timeout=1.0)
 
-        self.result_data = self._build_result()
-        self._running = False
+        result = self._build_result(run)
+        # 只有仍是「目前這一輪」才寫回結果，避免舊迴圈覆蓋新一輪
+        if self._run is run:
+            self.result_data = result
 
-    def _push_event(self, el: float, etype: str, detail: str):
-        with self._lock:
-            self._events.append({"t": round(el, 1), "type": etype, "detail": detail})
+    def _push_event(self, run: _Run, el: float, etype: str, detail: str):
+        with run.lock:
+            run.events.append({"t": round(el, 1), "type": etype, "detail": detail})
 
     # ── Result / scoring ─────────────────────────────────────────────────
-    def _build_result(self) -> dict:
-        with self._lock:
-            samples = list(self._samples)
-            events  = list(self._events)
+    def _build_result(self, run: _Run) -> dict:
+        with run.lock:
+            samples = list(run.samples)
+            events  = list(run.events)
 
         conn_samples = [s for s in samples if s["connected"]]
         rssi = _series_stats([s["rssi"] for s in conn_samples if s["rssi"] is not None])
@@ -311,10 +388,10 @@ class StabilityTest:
         tx   = _series_stats([float(s["tx_rate"]) for s in conn_samples
                               if s["tx_rate"]])
 
-        gw_stats   = self._gw_worker.stats()   if self._gw_worker else None
-        inet_stats = self._inet_worker.stats() if self._inet_worker else None
-        gw_pings   = self._gw_worker.snapshot()   if self._gw_worker else []
-        inet_pings = self._inet_worker.snapshot() if self._inet_worker else []
+        gw_stats   = run.gw_worker.stats()      if run.gw_worker else None
+        inet_stats = run.inet_worker.stats()    if run.inet_worker else None
+        gw_pings   = run.gw_worker.snapshot()   if run.gw_worker else []
+        inet_pings = run.inet_worker.snapshot() if run.inet_worker else []
 
         n_roam = sum(1 for e in events if e["type"] == "roam")
         n_disc = sum(1 for e in events if e["type"] == "disconnect")
@@ -333,7 +410,7 @@ class StabilityTest:
             add("critical", "📵", "測試期間完全沒有 Wi-Fi 連線",
                 "無法取得任何連線樣本",
                 "請先連上 Wi-Fi 再執行穩定度測試", 100)
-            return self._finalize(samples, events, rssi, snr, tx,
+            return self._finalize(run, samples, events, rssi, snr, tx,
                                   gw_stats, inet_stats, gw_pings, inet_pings,
                                   findings, max(0, score))
 
@@ -371,16 +448,18 @@ class StabilityTest:
                     f"RSSI 標準差僅 {rssi['std']} dB", "保持現狀")
 
         # ── RSSI 絕對值 ──
+        # 門檻與 recommender 共用（死角 -70 / 語音 -67 / 數據 -65），同一份報告不再互相矛盾
+        from recommender import DATA_RSSI, VOICE_RSSI, DEAD_ZONE_RSSI
         if rssi["mean"] is not None:
-            if rssi["mean"] < -75:
+            if rssi["mean"] < DEAD_ZONE_RSSI:
                 add("critical", "🔻", f"訊號過弱（平均 {rssi['mean']} dBm）",
-                    "低於 -75 dBm 時連線品質難以穩定",
+                    f"低於 {DEAD_ZONE_RSSI} dBm（死角門檻）時連線品質難以穩定",
                     "縮短與 AP 的距離、減少隔牆，或增設 AP / Mesh 節點", 15)
-            elif rssi["mean"] < -70:
+            elif rssi["mean"] < VOICE_RSSI:
                 add("warning", "🔻", f"訊號偏弱（平均 {rssi['mean']} dBm）",
-                    "邊緣覆蓋區，易受環境變化影響",
+                    f"低於語音/漫遊建議門檻 {VOICE_RSSI} dBm，易受環境變化影響",
                     "建議調整 AP 位置或新增節點改善覆蓋", 8)
-            elif rssi["mean"] < -65:
+            elif rssi["mean"] < DATA_RSSI:
                 add("info", "📡", f"訊號中等（平均 {rssi['mean']} dBm）",
                     "一般使用尚可，高吞吐應用可能受限",
                     "如需更高速率可優化 AP 擺放位置", 3)
@@ -468,21 +547,21 @@ class StabilityTest:
         elif any(f["severity"] == "warning" for f in findings):
             score = min(score, 84)
 
-        return self._finalize(samples, events, rssi, snr, tx,
+        return self._finalize(run, samples, events, rssi, snr, tx,
                               gw_stats, inet_stats, gw_pings, inet_pings,
                               findings, max(0, min(100, score)))
 
-    def _finalize(self, samples, events, rssi, snr, tx,
+    def _finalize(self, run, samples, events, rssi, snr, tx,
                   gw_stats, inet_stats, gw_pings, inet_pings,
                   findings, score) -> dict:
         first_conn = next((s for s in samples if s["connected"]), {})
-        meta = getattr(self, "_meta", {}) or {}
+        meta = run.meta or {}
         sev_rank = {"critical": 0, "warning": 1, "info": 2, "good": 3}
         findings.sort(key=lambda f: sev_rank.get(f["severity"], 9))
         return {
             "ok":        True,
             "tested_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "duration":  self._duration,
+            "duration":  run.duration,
             "ssid":      meta.get("ssid") or first_conn.get("ssid") or "—",
             "bssid":     meta.get("bssid") or first_conn.get("bssid") or "—",
             "channel":   meta.get("channel") or first_conn.get("channel"),

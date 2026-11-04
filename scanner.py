@@ -15,18 +15,22 @@ _selected_iface: str = ""       # "" = use system default
 from collections import deque
 
 # ─── OUI vendor lookup (lazy-loaded) ───────────────────────────────────────
+# 改用 lan_scanner 的離線 OUI 純字典（thread-safe）；mac_vendor_lookup 的同步
+# lookup 內部會跑 asyncio loop，多執行緒下約 75% 失敗（RuntimeError 被吞 → 空廠牌）。
 _oui: Optional[object] = None
 _oui_lock = threading.Lock()
 
 def _get_oui():
+    """回傳已載入 OUI 字典的 lan_scanner 模組；失敗回 False。只載入一次。"""
     global _oui
     if _oui is not None:
         return _oui
     with _oui_lock:
         if _oui is None:
             try:
-                from mac_vendor_lookup import MacLookup
-                _oui = MacLookup()
+                import lan_scanner
+                lan_scanner._ensure_oui()
+                _oui = lan_scanner
             except Exception:
                 _oui = False
     return _oui
@@ -36,10 +40,16 @@ def lookup_vendor(bssid: str) -> str:
     if not bssid or ":" not in bssid or bssid.startswith("<"):
         return ""
     try:
+        # 本地管理位址（第一個 octet 的 0x02 位元）是隨機/虛擬 MAC，不對應任何廠牌
+        if int(bssid.split(":", 1)[0], 16) & 0x02:
+            return ""
+    except ValueError:
+        return ""
+    try:
         m = _get_oui()
         if not m:
             return ""
-        return m.lookup(bssid) or ""
+        return m._vendor(bssid) or ""
     except Exception:
         return ""
 
@@ -360,8 +370,13 @@ def get_interfaces() -> list[dict]:
 
 def set_interface(name: str) -> bool:
     """Select which Wi-Fi interface to use for scanning."""
-    global _selected_iface
+    global _selected_iface, _conn_cache
     _selected_iface = name
+    # 換介面 → 作廢快取，避免回傳舊介面的結果
+    with _conn_lock:
+        _conn_cache = (0.0, None)
+    with _scan_state_lock:
+        _scan_cache["nets"] = None
     return True
 
 
@@ -376,26 +391,78 @@ def _get_iface():
     return client.interface()
 
 
+# ─── 掃描快取（single-flight + TTL）──────────────────────────────────────
+# 一次 CoreWLAN 主動掃描約 3.4 秒，且呼叫太頻繁會回 EBUSY（code 16）。
+# 同時間只跑一個真實掃描；TTL 內或掃描進行中的其他呼叫者直接拿最新結果。
+_SCAN_TTL        = 8.0
+_scan_lock       = threading.Lock()   # 真實掃描的 single-flight 鎖
+_scan_state_lock = threading.Lock()   # 保護 _scan_cache
+_scan_cache: dict = {"ts": 0.0, "nets": None, "iface": ""}
+
+
+def _scan_cached(max_age: float) -> Optional[list]:
+    with _scan_state_lock:
+        c = _scan_cache
+        if c["nets"] is None or c["iface"] != _selected_iface:
+            return None
+        if time.monotonic() - c["ts"] > max_age:
+            return None
+        # 回傳複本：呼叫端（analyzer/recommender）可能會改 dict
+        return [dict(n) for n in c["nets"]]
+
+
+def _scan_corewlan() -> Optional[list]:
+    """執行一次真實掃描；回傳 None 代表這次沒拿到任何網路（勿覆蓋快取）。"""
+    iface = _get_iface()
+    if iface is None:
+        return []
+    nets, err = iface.scanForNetworksWithName_error_(None, None)
+    # EBUSY 時 CoreWLAN 仍會回傳有效的快取網路集合 → 只要非空就照用
+    if not nets:
+        try:
+            nets = iface.cachedScanResults()
+        except Exception:
+            nets = None
+    if not nets:
+        return None if err else []
+    results = [r for n in nets if (r := _parse_network(n))]
+    results.sort(key=lambda x: x["rssi"], reverse=True)
+    return results
+
+
 def scan_networks() -> list[dict]:
     """Return sorted list of visible Wi-Fi networks (cross-platform)."""
     if _PLATFORM == "Windows":
         from scanner_windows import scan_networks as _win
         return _win()
     # macOS — CoreWLAN
+    fresh = _scan_cached(_SCAN_TTL)
+    if fresh is not None:
+        return fresh
+    if not _scan_lock.acquire(blocking=False):
+        # 已有掃描進行中：有舊結果就先回舊的，沒有就等它掃完共用結果
+        stale = _scan_cached(float("inf"))
+        if stale:
+            return stale
+        _scan_lock.acquire()
     try:
-        iface = _get_iface()
-        if iface is None:
-            return []
-        nets, err = iface.scanForNetworksWithName_error_(None, None)
-        if err or not nets:
-            return []
-        results = [r for n in nets if (r := _parse_network(n))]
-        results.sort(key=lambda x: x["rssi"], reverse=True)
-        return results
+        fresh = _scan_cached(_SCAN_TTL)      # 等鎖期間別人可能剛掃完
+        if fresh is not None:
+            return fresh
+        iface_name = _selected_iface
+        results = _scan_corewlan()
+        if results is None:
+            # 掃描失敗且無快取網路：退回上一次結果（若有），避免 UI 顯示 0 個網路
+            return _scan_cached(float("inf")) or []
+        with _scan_state_lock:
+            _scan_cache.update(ts=time.monotonic(), nets=results, iface=iface_name)
+        return [dict(n) for n in results]
     except ImportError:
         return _demo_networks()
     except Exception as e:
         return [{"_error": str(e)}]
+    finally:
+        _scan_lock.release()
 
 
 def get_supported_bands() -> list[str]:
@@ -417,60 +484,132 @@ def get_supported_bands() -> list[str]:
         return ["2.4GHz", "5GHz"]
 
 
+# ─── 目前連線（熱路徑只走 CoreWLAN，~毫秒級）───────────────────────────
+# 舊版每次呼叫都跑 system_profiler（~3.8 秒）。macOS 14.4+ 上它的 SSID 在
+# CoreWLAN 看不到時同樣是 '<redacted>'；PHY 用 activePHYMode()、速率用
+# transmitRate()（即時值）即可。system_profiler 降級為背景補充，只在
+# activePHYMode() 無效時才用來補 standard，請求執行緒永不等待它。
+_CONN_TTL  = 1.0
+_conn_lock = threading.Lock()
+_conn_cache: tuple = (0.0, None)      # (monotonic ts, result)
+
+_SP_TTL      = 120.0
+_sp_lock     = threading.Lock()
+_sp_cache: dict = {}                  # (bssid, channel) → (monotonic ts, info)
+_sp_inflight = False
+
+
+def _sp_refresh(key: tuple):
+    global _sp_inflight
+    try:
+        info = _system_profiler_info()
+    except Exception:
+        info = {}
+    with _sp_lock:
+        if len(_sp_cache) > 32:
+            _sp_cache.clear()
+        _sp_cache[key] = (time.monotonic(), info)
+        _sp_inflight = False
+
+
+def _sp_enrich(key: tuple) -> dict:
+    """非阻塞：回傳 (bssid, channel) 對應的 system_profiler 快取；過期或沒有時
+    觸發單一背景刷新（single-flight），本次先回舊值或空 dict。"""
+    global _sp_inflight
+    with _sp_lock:
+        ent = _sp_cache.get(key)
+        if ent and time.monotonic() - ent[0] < _SP_TTL:
+            return ent[1]
+        if not _sp_inflight:
+            _sp_inflight = True
+            try:
+                threading.Thread(target=_sp_refresh, args=(key,), daemon=True,
+                                 name="sp-enrich").start()
+            except Exception:
+                _sp_inflight = False
+        return ent[1] if ent else {}
+
+
+def _read_connection() -> dict:
+    iface = _get_iface()
+    if iface is None:
+        return {"connected": False}
+
+    ch    = iface.wlanChannel()
+    band  = BAND_MAP.get(int(ch.channelBand()), "Unknown") if ch else "Unknown"
+    width = WIDTH_MAP.get(int(ch.channelWidth()), "20") if ch else "20"
+    chan  = int(ch.channelNumber()) if ch else 0
+
+    rssi_raw  = iface.rssiValue()
+    noise_raw = iface.noiseMeasurement()
+    rssi  = int(rssi_raw)  if rssi_raw  is not None else -100
+    noise = int(noise_raw) if noise_raw is not None else -100
+
+    if rssi == -100 and noise == -100:
+        return {"connected": False}
+
+    snr    = rssi - noise
+    tx_raw = iface.transmitRate()
+    txr    = round(float(tx_raw), 1) if tx_raw else 0.0
+
+    ssid_raw = iface.ssid()
+    bssid    = iface.bssid() or ""
+
+    # PHY：activePHYMode() 列舉 0 none / 1 a / 2 b / 3 g / 4 n / 5 ac / 6 ax / 7 be
+    try:
+        phy_num = int(iface.activePHYMode() or 0)
+    except Exception:
+        phy_num = 0
+    if 1 <= phy_num <= 7:
+        std, std_src = PHY_MAP[phy_num], "corewlan"
+    else:
+        sp = _sp_enrich((bssid, chan))
+        if sp.get("phy"):
+            std, std_src = sp["phy"], "system_profiler"
+        else:
+            std, std_src = _infer_standard(band, width, rssi), "inferred"
+
+    qkey, qlabel, qcolor = _quality(rssi, snr)
+    qscore = composite_quality_score(rssi, snr, noise)
+
+    res = {
+        "connected": True,
+        "ssid":    ssid_raw or "<需定位服務授權>",
+        "bssid":   bssid,
+        "vendor":  lookup_vendor(bssid),
+        "rssi":    rssi,
+        "noise":   noise,
+        "snr":     snr,
+        "tx_rate": txr,
+        "band":    band,
+        "channel": chan,
+        "width":   width,
+        "standard": std,
+        "standard_source": std_src,
+        "quality": qkey,
+        "quality_label": qlabel,
+        "quality_color": qcolor,
+        "quality_score": qscore,
+    }
+    if not ssid_raw:
+        res["needs_location"] = True
+    return res
+
+
 def current_connection() -> dict:
     """Return current connection details (cross-platform)."""
     if _PLATFORM == "Windows":
         from scanner_windows import current_connection as _win
         return _win()
+    global _conn_cache
     try:
-        iface = _get_iface()
-        if iface is None:
-            return {"connected": False}
-
-        ch    = iface.wlanChannel()
-        band  = BAND_MAP.get(int(ch.channelBand()), "Unknown") if ch else "Unknown"
-        width = WIDTH_MAP.get(int(ch.channelWidth()), "20") if ch else "20"
-        chan  = int(ch.channelNumber()) if ch else 0
-
-        rssi_raw  = iface.rssiValue()
-        noise_raw = iface.noiseMeasurement()
-        rssi  = int(rssi_raw)  if rssi_raw  is not None else -100
-        noise = int(noise_raw) if noise_raw is not None else -100
-
-        if rssi == -100 and noise == -100:
-            return {"connected": False}
-
-        snr   = rssi - noise
-        tx_raw = iface.transmitRate()
-        txr   = round(float(tx_raw), 1) if tx_raw else 0.0
-
-        sp   = _system_profiler_info()
-        ssid = iface.ssid() or sp.get("ssid") or "<需定位服務授權>"
-        std  = sp.get("phy") or _infer_standard(band, width, rssi)
-
-        bssid  = iface.bssid() or sp.get("bssid", "")
-        vendor = lookup_vendor(bssid)
-        qkey, qlabel, qcolor = _quality(rssi, snr)
-        qscore = composite_quality_score(rssi, snr, noise)
-
-        return {
-            "connected": True,
-            "ssid":    ssid,
-            "bssid":   bssid,
-            "vendor":  vendor,
-            "rssi":    rssi,
-            "noise":   noise,
-            "snr":     snr,
-            "tx_rate": sp.get("rate") or txr,
-            "band":    band,
-            "channel": chan,
-            "width":   width,
-            "standard": std,
-            "quality": qkey,
-            "quality_label": qlabel,
-            "quality_color": qcolor,
-            "quality_score": qscore,
-        }
+        # 1 秒內的併發呼叫共用同一次 CoreWLAN 讀取（持鎖讀取，後到者等 ~15 ms）
+        with _conn_lock:
+            ts, res = _conn_cache
+            if res is None or time.monotonic() - ts >= _CONN_TTL:
+                res = _read_connection()
+                _conn_cache = (time.monotonic(), res)
+            return dict(res)       # 複本：SignalMonitor 等呼叫端會加 ts 欄位
     except ImportError:
         return _demo_current()
     except Exception as e:
@@ -518,21 +657,43 @@ class SignalMonitor:
         self.interval    = interval
         self.max_pts     = max_pts
         self._lock       = threading.Lock()
+        self._ctl_lock   = threading.Lock()   # 序列化 start/stop
         self._data: list[dict] = []
-        self._running    = False
         self._thread: threading.Thread = None
+        # 每一代執行緒各自一個停止 Event：舊執行緒看到自己的 Event 被設就退出，
+        # 不會因為 stop→start 把共用旗標翻回 True 而「復活」
+        self._stop_evt   = threading.Event()
+        self._stop_evt.set()
         self._pause_event = threading.Event()
         self._pause_event.set()  # not paused by default
 
+    @property
+    def _running(self) -> bool:
+        """server.py 的 SSE 串流以 getattr(_monitor, "_running") 判斷是否已停止。"""
+        t = self._thread
+        return bool(t and t.is_alive() and not self._stop_evt.is_set())
+
     def start(self):
-        if self._running:
-            return
-        self._running = True
-        self._thread  = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        with self._ctl_lock:
+            if self._running:
+                return
+            self._join_old()
+            evt = threading.Event()
+            self._stop_evt = evt
+            self._thread   = threading.Thread(target=self._loop, args=(evt,),
+                                              daemon=True, name="signal-monitor")
+            self._thread.start()
 
     def stop(self):
-        self._running = False
+        with self._ctl_lock:
+            self._join_old()
+
+    def _join_old(self):
+        self._stop_evt.set()
+        self._pause_event.set()          # 暫停中的執行緒也要能醒來退出
+        t = self._thread
+        if t and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=2.0)
 
     def pause(self):
         self._pause_event.clear()
@@ -540,19 +701,28 @@ class SignalMonitor:
     def resume(self):
         self._pause_event.set()
 
-    def _loop(self):
-        while self._running:
+    def _match(self, pt: dict) -> bool:
+        tgt = self.target_ssid
+        if not tgt:
+            return True
+        # 無定位授權時拿不到 SSID（佔位字串），不能因此把所有點濾掉
+        if pt.get("needs_location"):
+            return True
+        return pt.get("ssid") == tgt or pt.get("bssid") == tgt
+
+    def _loop(self, evt: threading.Event):
+        while not evt.is_set():
             self._pause_event.wait()
+            if evt.is_set():
+                break
             pt = current_connection()
-            if pt.get("connected") and (
-                self.target_ssid is None or pt.get("ssid") == self.target_ssid
-            ):
+            if pt.get("connected") and self._match(pt):
                 pt["ts"] = time.time()
                 with self._lock:
                     self._data.append(pt)
                     if len(self._data) > self.max_pts:
                         self._data = self._data[-self.max_pts:]
-            time.sleep(self.interval)
+            evt.wait(self.interval)
 
     def get_data(self) -> list[dict]:
         with self._lock:

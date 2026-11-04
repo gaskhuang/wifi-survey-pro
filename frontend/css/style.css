@@ -708,6 +708,7 @@ nav { padding: 6px 0; flex: 1; }
   background: rgba(59,130,246,.08); border: 1px solid rgba(59,130,246,.3);
   border-radius: var(--radius-sm);
 }
+.spa-playback[hidden] { display: none; }   /* display:flex 會蓋掉 hidden 屬性 */
 .spa-playback input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
 .spa-canvas-wrap canvas { cursor: grab; }
 .spa-canvas-wrap canvas:active { cursor: grabbing; }

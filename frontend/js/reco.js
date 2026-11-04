@@ -16,12 +16,12 @@ const Reco = (() => {
     { sev:"good",     label:"良好", color:"#22c55e" },
   ];
 
-  const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
+  const esc = s => window.escHtml(s);   // 共用 app.js 版本（含引號，可用於屬性）
 
   function panelHTML(a, title) {
     const { score, grade, issues, counts } = a;
     const counded = COUNT_META.map(({ sev, label, color }) =>
-      `<span class="reco-count"><b style="color:${color}">${counts[sev]}</b> ${label}</span>`).join("");
+      `<span class="reco-count"><b style="color:${color}">${esc(counts[sev])}</b> ${label}</span>`).join("");
 
     let body = "";
     for (const sev of SEV_ORDER) {
@@ -29,7 +29,7 @@ const Reco = (() => {
       if (!group.length) continue;
       body += `<div class="diag-section-title">${SEV_LABEL[sev]}（${group.length}）</div>`;
       body += group.map(issue => `
-        <div class="diag-issue ${issue.severity}">
+        <div class="diag-issue ${esc(issue.severity)}">
           <div class="diag-issue-icon">${esc(issue.icon || "•")}</div>
           <div class="diag-issue-body">
             <div class="diag-issue-title">${esc(issue.title)}</div>
@@ -47,8 +47,8 @@ const Reco = (() => {
       <div class="reco-head">
         <div class="reco-title">💡 ${esc(title || "優化建議方案")}</div>
         <div class="reco-score">
-          <span class="reco-score-num" style="color:${grade.color}">${score}</span>
-          <span class="reco-grade" style="color:${grade.color}">${grade.emoji} ${grade.label}</span>
+          <span class="reco-score-num" style="color:${esc(grade.color)}">${esc(score)}</span>
+          <span class="reco-grade" style="color:${esc(grade.color)}">${esc(grade.emoji)} ${esc(grade.label)}</span>
         </div>
         <div class="reco-counts">${counded}</div>
       </div>

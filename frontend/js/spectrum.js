@@ -451,12 +451,12 @@ const Spectrum = (() => {
       if (hit) {
         const bssidText = hit.bssid?.startsWith("<") ? "需定位授權" : hit.bssid;
         tooltip.innerHTML = [
-          `<strong style="color:${_networkColor(hit)}">${hit.ssid || "(Hidden)"}</strong>`,
-          `BSSID: <span style="font-family:monospace;font-size:10px">${bssidText}</span>`,
-          `訊號: <strong>${hit.rssi} dBm</strong> &nbsp; SNR: ${hit.snr} dB &nbsp; ${hit.signal_pct}%`,
-          `頻道: <strong>ch${hit.channel}</strong> &nbsp; ${hit.band} &nbsp; ${hit.width} MHz`,
-          `標準: ${hit.standard}`,
-          hit.vendor ? `廠商: ${hit.vendor}` : "",
+          `<strong style="color:${escHtml(_networkColor(hit))}">${escHtml(hit.ssid || "(Hidden)")}</strong>`,
+          `BSSID: <span style="font-family:monospace;font-size:10px">${escHtml(bssidText)}</span>`,
+          `訊號: <strong>${escHtml(hit.rssi)} dBm</strong> &nbsp; SNR: ${escHtml(hit.snr)} dB &nbsp; ${escHtml(hit.signal_pct)}%`,
+          `頻道: <strong>ch${escHtml(hit.channel)}</strong> &nbsp; ${escHtml(hit.band)} &nbsp; ${escHtml(hit.width)} MHz`,
+          `標準: ${escHtml(hit.standard)}`,
+          hit.vendor ? `廠商: ${escHtml(hit.vendor)}` : "",
         ].filter(Boolean).join("<br>");
 
         const cx = e.clientX - rect.left;

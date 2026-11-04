@@ -108,9 +108,9 @@ function renderDiagResult(assessment, current, netperf, networks) {
 
   // Summary text
   const conn = current?.connected
-    ? `已連接 ${current.ssid || "—"}（${current.band} ${current.rssi} dBm / SNR ${current.snr} dB）`
+    ? `已連接 ${escHtml(current.ssid || "—")}（${escHtml(current.band)} ${escHtml(current.rssi)} dBm / SNR ${escHtml(current.snr)} dB）`
     : "未偵測到 Wi-Fi 連線";
-  const pingTxt = netperf?.ping_ms != null ? `Ping ${netperf.ping_ms} ms` : "效能測試未完成";
+  const pingTxt = netperf?.ping_ms != null ? `Ping ${escHtml(netperf.ping_ms)} ms` : "效能測試未完成";
   document.getElementById("diag-summary").innerHTML =
     `<strong style="color:var(--text-1)">診斷摘要</strong><br>
      ${conn}<br>
@@ -131,16 +131,16 @@ function renderDiagResult(assessment, current, netperf, networks) {
     if (!group.length) continue;
     html += `<div class="diag-section-title">${sevLabels[sev]}（${group.length}）</div>`;
     html += group.map(issue => `
-      <div class="diag-issue ${issue.severity}">
-        <div class="diag-issue-icon">${issue.icon || "•"}</div>
+      <div class="diag-issue ${escHtml(issue.severity)}">
+        <div class="diag-issue-icon">${escHtml(issue.icon || "•")}</div>
         <div class="diag-issue-body">
-          <div class="diag-issue-title">${issue.title}</div>
-          ${issue.problem ? `<div class="diag-issue-problem">${issue.problem}</div>` : ""}
-          <div class="diag-issue-rec">${issue.recommendation}</div>
+          <div class="diag-issue-title">${escHtml(issue.title)}</div>
+          ${issue.problem ? `<div class="diag-issue-problem">${escHtml(issue.problem)}</div>` : ""}
+          <div class="diag-issue-rec">${escHtml(issue.recommendation)}</div>
         </div>
         <div>
           <span class="diag-sev-badge ${sevBadge[issue.severity]}">${sevBadgeTx[issue.severity]}</span>
-          <div style="font-size:10px;color:var(--text-3);margin-top:3px;text-align:center">${issue.category}</div>
+          <div style="font-size:10px;color:var(--text-3);margin-top:3px;text-align:center">${escHtml(issue.category)}</div>
         </div>
       </div>`).join("");
   }
@@ -203,12 +203,12 @@ function updateReportPreviewFromDiag(d) {
   const a = d.assessment;
   if (!a) return;
   el.innerHTML = `
-    <p><strong>整體健康分數：${a.score}/100 ${a.grade.emoji} ${a.grade.label}</strong></p>
+    <p><strong>整體健康分數：${escHtml(a.score)}/100 ${escHtml(a.grade.emoji)} ${escHtml(a.grade.label)}</strong></p>
     <p style="margin-top:6px">偵測 ${d.networks?.length||0} 個鄰近網路（2.4G:${(s.bands||{})["2.4GHz"]||0} / 5G:${(s.bands||{})["5GHz"]||0} / 6G:${(s.bands||{})["6GHz"]||0}）</p>
     <p>發現 <span style="color:#ef4444">${a.counts.critical} 個嚴重問題</span>、<span style="color:#eab308">${a.counts.warning} 個警告</span>、<span style="color:#3b82f6">${a.counts.info} 個建議</span></p>
     ${a.issues.filter(i => i.severity === "critical" || i.severity === "warning").slice(0,3).map(i =>
       `<div style="margin-top:8px;padding:6px 10px;background:rgba(255,255,255,.03);border-left:2px solid ${i.severity==="critical"?"#ef4444":"#eab308"};border-radius:3px;font-size:11px">
-        <strong>${i.title}</strong><br><span style="color:var(--text-2)">${i.recommendation}</span>
+        <strong>${escHtml(i.title)}</strong><br><span style="color:var(--text-2)">${escHtml(i.recommendation)}</span>
       </div>`).join("")}
   `;
 }

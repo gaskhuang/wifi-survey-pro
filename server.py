@@ -39,15 +39,65 @@ _scan_running = False  # flag for continuous scan
 _scan_lock    = threading.Lock()
 
 
+# ─── 共用：數值參數解析（格式錯誤回預設值、超界夾到範圍內，不再回 500）────────
+def _num(raw, default, lo, hi, cast=int):
+    try:
+        v = cast(raw)
+    except (TypeError, ValueError):
+        return default
+    if v != v:                       # NaN
+        return default
+    return max(lo, min(hi, v))
+
+
+@app.errorhandler(Exception)
+def _api_error(e):
+    """API 路徑的未捕捉例外一律回 JSON（前端都以 JSON 解析，HTML 500 頁會讓畫面卡住）。"""
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": e.description}), e.code
+        return e
+    print(f"[ERROR] {request.path}: {e!r}", file=sys.stderr)
+    return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ─── 進行中的背景工作登記（結束程式時要能找到並停掉）──────────────────────────
+_ACTIVE_CAPTURES: set = set()          # traffic_monitor.Capture
+_ACTIVE_LAN = {"stop": None}           # 目前 LAN 掃描的停止旗標（同時只跑一個）
+_ACTIVE_LOCK = threading.Lock()
+
+
 # ─── 結束時清理背景子程序/執行緒（避免孤兒 iperf3 -s 佔埠、殘留執行緒）──────────
+# 注意：Cmd+Q 會繞過 atexit（NSApplication 直接 C exit），main.py 另在視窗 closing 事件呼叫本函式。
 import atexit
+
+
+def _startup_cleanup():
+    """啟動時收掉上次（例如被強制結束）遺留的孤兒 iperf3 server，避免 5201 被佔用。"""
+    try:
+        fn = getattr(iperf3_mgr, "cleanup_stale", None)
+        if fn:
+            fn()
+    except Exception:
+        pass
+
+
+threading.Thread(target=_startup_cleanup, daemon=True).start()
 
 
 @atexit.register
 def _shutdown_cleanup():
-    for stop in (lambda: _monitor.stop(),
-                 lambda: iperf3_mgr.get_server().stop(),
-                 lambda: stability.TEST.stop()):
+    with _ACTIVE_LOCK:
+        caps = list(_ACTIVE_CAPTURES)
+        lan_stop = _ACTIVE_LAN["stop"]
+    steps = [lambda: _monitor.stop(),
+             lambda: stability.TEST.stop(),
+             lambda: lan_stop and lan_stop.set()]
+    steps += [(lambda c=c: c.stop()) for c in caps]
+    _iperf_cleanup = getattr(iperf3_mgr, "cleanup", None) or getattr(iperf3_mgr, "stop_all", None)
+    steps.append(_iperf_cleanup or (lambda: iperf3_mgr.get_server().stop()))
+    for stop in steps:
         try:
             stop()
         except Exception:
@@ -133,10 +183,12 @@ def api_recommend():
 
     current = data.get("current")
     if current is None:
-        try:
-            current = scanner.current_connection() or {}
-        except Exception:
-            current = {}
+        current = {}
+        if context in ("scan", "netperf", "spectrum", "monitor"):   # lan / heatmap 用不到
+            try:
+                current = scanner.current_connection() or {}
+            except Exception:
+                current = {}
 
     try:
         assessment = recommendations.assess(context, data, networks, current)
@@ -158,15 +210,14 @@ def api_heatmap_floorplan():
 @app.route("/api/heatmap/add", methods=["POST"])
 def api_heatmap_add():
     data = request.get_json(silent=True) or {}
-    x    = float(data.get("x", 0))
-    y    = float(data.get("y", 0))
-    rssi = int(data.get("rssi", -70))
-    if rssi == -70 and not data.get("rssi"):
-        conn = scanner.current_connection()
-        rssi = conn.get("rssi", -70)
-    snr    = int(data.get("snr", 0))
-    ssid   = data.get("ssid", "")
-    qscore = int(data.get("quality_score", 0))
+    x    = _num(data.get("x"), 0.0, 0.0, 1.0, float)
+    y    = _num(data.get("y"), 0.0, 0.0, 1.0, float)
+    rssi = _num(data.get("rssi"), None, -120, 0)
+    if rssi is None:
+        rssi = (scanner.current_connection() or {}).get("rssi", -70)
+    snr    = _num(data.get("snr"), 0, 0, 100)
+    ssid   = str(data.get("ssid") or "")
+    qscore = _num(data.get("quality_score"), 0, 0, 100)
     scan_results = data.get("scan_results", [])
     return jsonify(heatmap_gen.add_measurement(x, y, rssi, snr, ssid, qscore, scan_results))
 
@@ -188,8 +239,8 @@ def api_heatmap_clear():
 
 @app.route("/api/heatmap/generate")
 def api_heatmap_generate():
-    w       = int(request.args.get("w", 1000))
-    h       = int(request.args.get("h", 700))
+    w       = _num(request.args.get("w"), 1000, 200, 1600)
+    h       = _num(request.args.get("h"), 700, 200, 1600)
     labels  = request.args.get("labels", "1") == "1"
     metric  = request.args.get("metric", "rssi")   # rssi | snr | quality
     contour = request.args.get("contour", "1") == "1"
@@ -215,7 +266,7 @@ def api_heatmap_json():
 def api_monitor_start():
     data     = request.get_json(silent=True) or {}
     ssid     = data.get("ssid")
-    interval = float(data.get("interval", 2.0))
+    interval = _num(data.get("interval"), 2.0, 1.0, 60.0, float)
     _monitor.target_ssid = ssid
     _monitor.interval    = interval
     _monitor.clear()
@@ -237,17 +288,20 @@ def api_monitor_data():
 @app.route("/api/monitor/stream")
 def api_monitor_stream():
     def event_gen():
-        last_len = 0
+        # 以時間戳當游標：SignalMonitor 只保留最後 max_pts 筆（滑動視窗），
+        # 陣列長度到上限後就不再變，若用長度當游標會永遠推不出新點（圖表凍結）。
+        last_ts = 0.0
         idle = 0
         try:
             # 監控停止且已無新資料一段時間就自行收斂；客戶端斷線時 yield 會拋
             # GeneratorExit，交由 finally 結束，避免執行緒無限殘留。
             while True:
                 pts = _monitor.get_data()
-                if len(pts) > last_len:
-                    for pt in pts[last_len:]:
+                fresh = [pt for pt in pts if pt.get("ts", 0) > last_ts]
+                if fresh:
+                    for pt in fresh:
                         yield f"data: {json.dumps(pt)}\n\n"
-                    last_len = len(pts)
+                    last_ts = fresh[-1].get("ts", last_ts)
                     idle = 0
                 else:
                     idle += 1
@@ -267,19 +321,23 @@ def api_netperf():
     """Run ping/DNS/HTTP latency tests (no iperf3 server needed)."""
     target  = request.args.get("host", "8.8.8.8")
     dns     = request.args.get("dns", "8.8.8.8")
-    samples = int(request.args.get("n", 5))
-    # Run in thread with timeout
-    result: dict = {}
+    samples = _num(request.args.get("n"), 5, 1, 20)
+    box: dict = {}
     done_event = threading.Event()
 
     def run():
-        result.update(scanner.test_network_performance(target, dns, samples))
+        try:
+            box["r"] = scanner.test_network_performance(target, dns, samples)
+        except Exception as e:
+            box["err"] = str(e)
         done_event.set()
 
-    t = threading.Thread(target=run, daemon=True)
-    t.start()
-    done_event.wait(timeout=30)
-    return jsonify({"ok": True, **result})
+    threading.Thread(target=run, daemon=True).start()
+    if not done_event.wait(timeout=30):
+        return jsonify({"ok": False, "error": "測試逾時（30 秒），請檢查網路連線"}), 504
+    if "err" in box:
+        return jsonify({"ok": False, "error": box["err"]}), 500
+    return jsonify({"ok": True, **box["r"]})
 
 
 # ─── Export endpoints ─────────────────────────────────────────────────────────
@@ -374,37 +432,45 @@ def api_iperf_server_status():
 @app.route("/api/iperf/run", methods=["POST"])
 def api_iperf_run():
     data     = request.get_json(silent=True) or {}
-    target   = data.get("target", "127.0.0.1")
-    port     = int(data.get("port", 5201))
-    duration = int(data.get("duration", 10))
+    target   = str(data.get("target") or "127.0.0.1").strip()
+    port     = _num(data.get("port"), 5201, 1, 65535)
+    duration = _num(data.get("duration"), 10, 1, 120)
     mode     = data.get("mode", "tcp_dl")
-    streams  = int(data.get("streams", 1))
+    streams  = _num(data.get("streams"), 1, 1, 16)
 
-    result: dict = {}
+    box: dict = {}
     done   = threading.Event()
     def _run():
-        result.update(iperf3_mgr.run_test(target, port, duration, mode, streams))
+        try:
+            box["r"] = iperf3_mgr.run_test(target, port, duration, mode, streams)
+        except Exception as e:
+            box["r"] = {"ok": False, "error": str(e)}
         done.set()
 
     threading.Thread(target=_run, daemon=True).start()
-    done.wait(timeout=duration + 20)
-    return jsonify(result if result else {"ok": False, "error": "Test timed out"})
+    if not done.wait(timeout=duration + 20):
+        return jsonify({"ok": False, "error": "Test timed out"}), 504
+    return jsonify(box.get("r") or {"ok": False, "error": "Test timed out"})
 
 
 @app.route("/api/iperf/stream")
 def api_iperf_stream():
     """SSE endpoint — streams iperf3 output line by line + final analysis."""
-    target   = request.args.get("target", "127.0.0.1")
-    port     = int(request.args.get("port", 5201))
-    duration = int(request.args.get("duration", 10))
+    target   = (request.args.get("target") or "127.0.0.1").strip()
+    port     = _num(request.args.get("port"), 5201, 1, 65535)
+    duration = _num(request.args.get("duration"), 10, 1, 120)
     mode     = request.args.get("mode", "tcp_dl")
-    streams  = int(request.args.get("streams", 1))
+    streams  = _num(request.args.get("streams"), 1, 1, 16)
 
     def generate():
-        for event_type, data in iperf3_mgr.stream_test(target, port, duration, mode, streams):
-            payload = json.dumps(data, ensure_ascii=False)
-            yield f"event: {event_type}\ndata: {payload}\n\n"
-        yield "event: done\ndata: {}\n\n"
+        inner = iperf3_mgr.stream_test(target, port, duration, mode, streams)
+        try:
+            for event_type, data in inner:
+                payload = json.dumps(data, ensure_ascii=False)
+                yield f"event: {event_type}\ndata: {payload}\n\n"
+            yield "event: done\ndata: {}\n\n"
+        finally:
+            inner.close()      # 客戶端斷線 → 觸發 stream_test 的清理，收掉 iperf3 -c
 
     return Response(
         stream_with_context(generate()),
@@ -421,7 +487,7 @@ def api_diagnose_stream():
     掃描 → 頻道分析 → 連線狀態 → Ping/DNS → 速度測試 → 穩定度 → AI 建議
     事件：step（進度）/ partial（各區結果）/ done（完整彙整）
     """
-    duration = max(10, min(120, int(request.args.get("duration", 30))))
+    duration = _num(request.args.get("duration"), 30, 10, 120)
     do_speed = request.args.get("speedtest", "1") == "1"
     do_ai    = request.args.get("ai", "1") == "1"
 
@@ -429,6 +495,20 @@ def api_diagnose_stream():
         return f"event: {etype}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
     def gen():
+        try:
+            yield from _gen()
+        finally:
+            # 客戶端斷線/重新整理：本次啟動的穩定度測試一併停止，否則會擋住下一次診斷
+            if stab_flag.get("on"):
+                try:
+                    if stability.TEST.status().get("running"):
+                        stability.TEST.stop()
+                except Exception:
+                    pass
+
+    stab_flag: dict = {}
+
+    def _gen():
         results: dict = {}
 
         def run_step(key, label, fn):
@@ -459,6 +539,7 @@ def api_diagnose_stream():
         yield ev("step", {"key": "stability", "label": f"連線穩定度測試（{duration} 秒）",
                           "status": "running"})
         if stability.TEST.start(duration):
+            stab_flag["on"] = True
             while True:
                 st = stability.TEST.status()
                 if not st["running"]:
@@ -467,6 +548,7 @@ def api_diagnose_stream():
                                       "elapsed": st["elapsed"],
                                       "total":   st["duration"]})
                 time.sleep(2)
+            stab_flag["on"] = False
             results["stability"] = stability.TEST.result_data
             yield ev("step", {"key": "stability", "label": "連線穩定度測試",
                               "status": "ok"})
@@ -695,6 +777,11 @@ def api_lan_scan_stream():
 
     q: "queue.Queue" = queue.Queue()
     stop_evt = threading.Event()
+    with _ACTIVE_LOCK:
+        prev = _ACTIVE_LAN["stop"]
+        if prev is not None:
+            prev.set()                     # 取消前一個仍在跑的掃描，避免疊加耗盡 fd
+        _ACTIVE_LAN["stop"] = stop_evt
 
     def prog(done, total, host):
         if host is not None:
@@ -712,9 +799,16 @@ def api_lan_scan_stream():
                 q.put(("done", r))
         except Exception as e:
             q.put(("error", {"error": str(e)}))
+        finally:
+            with _ACTIVE_LOCK:
+                if _ACTIVE_LAN["stop"] is stop_evt:
+                    _ACTIVE_LAN["stop"] = None
         q.put((None, None))
 
     if err:
+        with _ACTIVE_LOCK:
+            if _ACTIVE_LAN["stop"] is stop_evt:
+                _ACTIVE_LAN["stop"] = None
         # 參數錯誤：直接回一個只含 error 事件的短串流（前端統一以 error 事件處理）
         def gen_err():
             yield _sse("error", {"error": err})
@@ -727,7 +821,11 @@ def api_lan_scan_stream():
         try:
             yield _sse("start", {"subnet": subnet, "deep": deep})
             while True:
-                etype, data = q.get()
+                try:
+                    etype, data = q.get(timeout=1.0)
+                except queue.Empty:
+                    yield ": keep-alive\n\n"   # 心跳：長時間無事件時也能即時偵測斷線
+                    continue
                 if etype is None:
                     break
                 yield _sse(etype, data)
@@ -787,6 +885,8 @@ def api_traffic_stream():
 
     def run():
         global _LAST_TRAFFIC
+        with _ACTIVE_LOCK:
+            _ACTIVE_CAPTURES.add(cap)
         try:
             result = cap.run(on_stats=lambda s: q.put(("stats", s)))
             _LAST_TRAFFIC = result
@@ -795,6 +895,9 @@ def api_traffic_stream():
             q.put(("error", {"error": str(e), "need_perm": True}))
         except Exception as e:
             q.put(("error", {"error": str(e)}))
+        finally:
+            with _ACTIVE_LOCK:
+                _ACTIVE_CAPTURES.discard(cap)
         q.put((None, None))
 
     if not traffic_monitor.can_capture():
@@ -844,8 +947,8 @@ def api_lan_export():
 @app.route("/api/stability/start", methods=["POST"])
 def api_stability_start():
     data     = request.get_json(silent=True) or {}
-    duration = int(data.get("duration", 60))
-    host     = data.get("host", "8.8.8.8")
+    duration = _num(data.get("duration"), 60, 10, 3600)
+    host     = str(data.get("host") or "8.8.8.8").strip()
     ok = stability.TEST.start(duration, host)
     return jsonify({"ok": ok, "error": None if ok else "測試進行中，請稍候"})
 

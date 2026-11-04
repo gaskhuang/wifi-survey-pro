@@ -144,7 +144,8 @@ def assess_heatmap(measurements: list) -> dict:
         return _pack(issues)
     recommender._check_coverage_gaps(measurements, issues)
     # 額外：覆蓋均勻度（標準差大代表訊號落差大、漫遊體驗差）
-    rssis = [m["rssi"] for m in measurements if m.get("rssi") is not None]
+    rssis = [r for r in (recommender._num(m.get("rssi")) for m in measurements
+                         if isinstance(m, dict)) if r is not None]
     if len(rssis) >= 3:
         std = statistics.pstdev(rssis)
         if std > 12:
@@ -152,7 +153,7 @@ def assess_heatmap(measurements: list) -> dict:
                 "severity": "warning", "category": "覆蓋均勻度", "icon": "📐",
                 "title": f"覆蓋落差大（RSSI 標準差 {std:.0f} dB）",
                 "problem": f"各量測點訊號從 {min(rssis)} 到 {max(rssis)} dBm，落差大，移動中漫遊體驗會不一致。",
-                "recommendation": "重新調整 AP 佈點與功率，讓相鄰 AP 覆蓋重疊區維持 -67~-72 dBm，縮小強弱落差。",
+                "recommendation": f"重新調整 AP 佈點與功率，讓相鄰 AP 覆蓋重疊區維持 {recommender.ROAM_OVERLAP}，縮小強弱落差。",
                 "value": round(std, 1),
             })
     return _pack(issues, "各量測點覆蓋均達標。")
@@ -190,12 +191,12 @@ def assess_monitor(samples: list, current: dict) -> dict:
             "title": f"訊號穩定（標準差 {rstd:.1f} dB）✓", "problem": "",
             "recommendation": f"✓ RSSI 波動小（{rmin}～{rmax} dBm），連線穩定。", "value": round(rstd, 1),
         })
-    # 最低 RSSI 是否曾掉到弱訊
-    if rmin < -75:
+    # 最低 RSSI 是否曾掉到死角（門檻與 recommender 共用）
+    if rmin < recommender.DEAD_ZONE_RSSI:
         issues.append({
             "severity": "warning", "category": "訊號低谷", "icon": "📉",
             "title": f"期間最低訊號達 {rmin} dBm",
-            "problem": f"監控期間訊號一度掉到 {rmin} dBm（低於 -75 dBm 死角門檻），該瞬間可能掉線或卡頓。",
+            "problem": f"監控期間訊號一度掉到 {rmin} dBm（低於 {recommender.DEAD_ZONE_RSSI} dBm 死角門檻），該瞬間可能掉線或卡頓。",
             "recommendation": "在此位置增設 AP 或調整現有 AP 位置/功率，避免訊號低谷。",
             "value": rmin,
         })

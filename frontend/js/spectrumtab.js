@@ -24,6 +24,10 @@ const SpectrumTab = (() => {
   const MAX_ROWS = 160;   // waterfall history depth
   const ROWS_3D  = 70;    // 3D 立體瀑布最大堆疊列數
   const MAX_REC  = 3000;  // 錄製緩衝最大 sweep 數
+  // 錄製只保留回放 / 建議需要的欄位（原本存整個 network 物件）。記憶體上限約：
+  // 3000 sweep × N 個 AP × 9 欄位，外加每 sweep 一份 bins 快取 600×4B ≈ 7.2 MB
+  const REC_FIELDS = ["band", "channel", "width", "rssi", "snr", "ssid", "bssid", "net_color", "standard"];
+  const SCAN_TIMEOUT_MS = 20000;   // 單次 /api/scan 逾時，避免卡住鏈式輪詢
   const AVG_A    = 0.2;   // 移動平均 EMA 係數
   const ML = 44, MR = 14, MT = 10, MB = 24;          // live chart margins
   const DB_TOP = -20, DB_BOT = -100;
@@ -56,6 +60,11 @@ const SpectrumTab = (() => {
   let _playing   = false;
   let _playIdx   = 0;
   let _playTimer = null;
+  let _playSuspended = false;  // 分頁 / 視窗隱藏時暫停回放計時器
+  // 回放增量狀態：maxHold/avg/rows 已累積到第幾個 sweep（-1 = 需整段重建）
+  let _pbAccIdx  = -1;
+  let _pbAccBand = "";
+  const _binCache = new WeakMap();   // sweep 物件 → {band, bins}，避免重複 computeBins
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const chFreq = (ch, band) =>
@@ -99,24 +108,43 @@ const SpectrumTab = (() => {
   }
   const rgbStr = (rgb, a) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
 
+  // 瀑布圖用的預先計算色表（packed RGBA，直接寫入 Uint32 view）。
+  // 4096 階：與逐點 cmap() 相比每通道最大誤差 1（256 階會到 3）。
+  const LUT_N = 4096;
+  const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+  const packRGBA = (r, g, b) => (LITTLE_ENDIAN
+    ? ((255 << 24) | (b << 16) | (g << 8) | r)
+    : ((r << 24) | (g << 16) | (b << 8) | 255)) >>> 0;
+  const CMAP_LUT = new Uint32Array(LUT_N);
+  for (let i = 0; i < LUT_N; i++) {
+    const c = cmap(i / (LUT_N - 1));
+    CMAP_LUT[i] = packRGBA(c[0], c[1], c[2]);
+  }
+  const WF_BG = packRGBA(11, 13, 20);
+
   // ── Scan loop（鏈式 setTimeout，等掃描回來才排下一次）──────────────────────
   function active() {
     return document.getElementById("tab-spectrumtab")?.classList.contains("active");
   }
 
   async function tick() {
-    if (active() && !_frozen && _mode === "live") {
+    if (active() && !document.hidden && !_frozen && _mode === "live") {
       try {
+        // 已連線 BSSID 直接用 app.js 輪詢發布的 APP.current；還沒有才並行抓一次
+        const curP = APP.current ? Promise.resolve(APP.current)
+                                 : getCurrentConn().catch(() => null);
         const [scanR, curR] = await Promise.all([
-          fetch("/api/scan").then(r => r.json()),
-          fetch("/api/current").then(r => r.json()),
+          fetchJSON("/api/scan", {}, SCAN_TIMEOUT_MS),
+          curP,
         ]);
         _lastNets = scanR.networks || [];
-        _curBssid = curR.connected ? (curR.bssid || "") : "";
+        _curBssid = curR?.connected ? (curR.bssid || "") : "";
         _sweeps++;
-        pushSweep(_lastNets);
+        const bins = pushSweep(_lastNets);
         if (_recording) {
-          _recBuf.push({ t: Date.now(), nets: _lastNets });
+          const sw = { t: Date.now(), nets: slimNets(_lastNets) };
+          _binCache.set(sw, { band: _band, bins });
+          _recBuf.push(sw);
           if (_recBuf.length > MAX_REC) _recBuf.shift();
           updateRecLabel();
         }
@@ -125,6 +153,14 @@ const SpectrumTab = (() => {
     }
     const iv = parseFloat(document.getElementById("spa-interval").value) || 2;
     _timer = setTimeout(tick, iv * 1000);
+  }
+
+  function slimNets(nets) {
+    return nets.map(n => {
+      const o = {};
+      for (const k of REC_FIELDS) if (n[k] !== undefined) o[k] = n[k];
+      return o;
+    });
   }
 
   // ── Waterfall / 疊加資料 ─────────────────────────────────────────────────────
@@ -158,6 +194,7 @@ const SpectrumTab = (() => {
     _avgInit = true;
     _rows.unshift({ bins });
     if (_rows.length > MAX_ROWS) _rows.length = MAX_ROWS;
+    return bins;
   }
 
   // 切頻段 / 載入錄製 / 重置時清空所有累積狀態
@@ -166,6 +203,7 @@ const SpectrumTab = (() => {
     _maxHold = new Float32Array(N_BINS);
     _avgBins = new Float32Array(N_BINS);
     _avgInit = false;
+    _pbAccIdx = -1;
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -176,6 +214,8 @@ const SpectrumTab = (() => {
     updateCards();
   }
 
+  // 只有尺寸 / DPR 改變才重設 canvas.width/height（會重新配置 backing store，
+  // DPR 2 時每次約數 MB）；否則沿用並把 context 狀態恢復成預設值再畫。
   function setupCanvas(id) {
     const canvas = document.getElementById(id);
     if (!canvas) return null;
@@ -183,13 +223,43 @@ const SpectrumTab = (() => {
     const W = wrap.clientWidth, H = wrap.clientHeight;
     if (!W || !H) return null;
     const dpr = window.devicePixelRatio || 1;
-    canvas.style.width  = W + "px";
-    canvas.style.height = H + "px";
-    canvas.width  = W * dpr;
-    canvas.height = H * dpr;
     const ctx = canvas.getContext("2d");
-    ctx.scale(dpr, dpr);
+    if (canvas._W !== W || canvas._H !== H || canvas._dpr !== dpr) {
+      canvas.style.width  = W + "px";
+      canvas.style.height = H + "px";
+      canvas.width  = W * dpr;
+      canvas.height = H * dpr;
+      canvas._W = W; canvas._H = H; canvas._dpr = dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    } else {
+      resetCtx(ctx, canvas, dpr);
+    }
     return { ctx, W, H };
+  }
+
+  // 等同重設 canvas 尺寸後的乾淨狀態（各 draw 函式假設從預設狀態開始）
+  function resetCtx(ctx, canvas, dpr) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "#000000";
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = 1;
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+    ctx.miterLimit = 10;
+    ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
+    ctx.font = "10px sans-serif";
+    ctx.textAlign = "start";
+    ctx.textBaseline = "alphabetic";
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = "rgba(0, 0, 0, 0)";
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.imageSmoothingEnabled = true;
   }
 
   function freqToX(f, W) {
@@ -373,31 +443,12 @@ const SpectrumTab = (() => {
 
     const plotW = Math.max(10, Math.round(W - ML - MR));
     const plotH = Math.max(10, Math.round(H - MB));
-    const img   = ctx.createImageData(plotW, plotH);
-    // 每列 ≥4px：約 60 列就能填滿視窗（2 秒/掃 ≈ 2 分鐘歷史），不用等 MAX_ROWS
-    const rowPx = Math.max(4, Math.floor(plotH / 60));
-
-    for (let y = 0; y < plotH; y++) {
-      const row = _rows[Math.floor(y / rowPx)];
-      for (let x = 0; x < plotW; x++) {
-        let rgb;
-        if (row) {
-          const v = row.bins[Math.floor(x / plotW * N_BINS)];
-          rgb = cmap(v);
-        } else {
-          rgb = [11, 13, 20];
-        }
-        const i = (y * plotW + x) * 4;
-        img.data[i] = rgb[0]; img.data[i+1] = rgb[1];
-        img.data[i+2] = rgb[2]; img.data[i+3] = 255;
-      }
-    }
+    const wf = getWfBuffers(plotW, plotH);
+    fillWaterfall(wf.px, wf.xb, plotW, plotH, _rows);
     // putImageData ignores transforms — paint via offscreen canvas so DPR scaling applies
-    const off = document.createElement("canvas");
-    off.width = plotW; off.height = plotH;
-    off.getContext("2d").putImageData(img, 0, 0);
+    wf.offCtx.putImageData(wf.img, 0, 0);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(off, ML, 0, plotW, plotH);
+    ctx.drawImage(wf.off, ML, 0, plotW, plotH);
 
     // Channel ticks
     ctx.font = "9px -apple-system";
@@ -418,6 +469,39 @@ const SpectrumTab = (() => {
     ctx.textAlign = "center";
     ctx.fillText("← 時間（新 → 舊）", 0, 0);
     ctx.restore();
+  }
+
+  // 瀑布像素緩衝：ImageData / 離屏 canvas / x→bin 對照表，尺寸不變就重複使用
+  let _wf = null;
+  function getWfBuffers(plotW, plotH) {
+    if (_wf && _wf.w === plotW && _wf.h === plotH) return _wf;
+    const off = document.createElement("canvas");
+    off.width = plotW; off.height = plotH;
+    const offCtx = off.getContext("2d");
+    const img = offCtx.createImageData(plotW, plotH);
+    const xb = new Uint16Array(plotW);
+    for (let x = 0; x < plotW; x++) xb[x] = Math.floor(x / plotW * N_BINS);
+    _wf = { w: plotW, h: plotH, off, offCtx, img, xb, px: new Uint32Array(img.data.buffer) };
+    return _wf;
+  }
+
+  // 每個瀑布列只算一條掃描線（查色表），其餘 rowPx-1 條直接 copyWithin 複製
+  function fillWaterfall(px, xb, plotW, plotH, rows) {
+    // 每列 ≥4px：約 60 列就能填滿視窗（2 秒/掃 ≈ 2 分鐘歷史），不用等 MAX_ROWS
+    const rowPx = Math.max(4, Math.floor(plotH / 60));
+    const LMAX = LUT_N - 1;
+    for (let y0 = 0, r = 0; y0 < plotH; y0 += rowPx, r++) {
+      const row  = rows[r];
+      const base = y0 * plotW;
+      if (row) {
+        const bins = row.bins;
+        for (let x = 0; x < plotW; x++) px[base + x] = CMAP_LUT[(bins[xb[x]] * LMAX + 0.5) | 0];
+      } else {
+        px.fill(WF_BG, base, base + plotW);
+      }
+      const yEnd = Math.min(plotH, y0 + rowPx);
+      for (let y = y0 + 1; y < yEnd; y++) px.copyWithin(y * plotW, base, base + plotW);
+    }
   }
 
   // ── 3D 立體瀑布（純 canvas 斜投影堆疊脊線，可拖曳旋轉視角）──────────────────
@@ -507,6 +591,17 @@ const SpectrumTab = (() => {
     ctx.fillText("拖曳旋轉視角 · 新列在前", padL, padT - 2);
   }
 
+  let _raf3d = 0;
+  function schedule3D() {
+    if (_raf3d) return;
+    _raf3d = requestAnimationFrame(() => { _raf3d = 0; if (_wfMode === "3d") draw3DWaterfall(); });
+  }
+  let _rafRender = 0;
+  function scheduleRender() {
+    if (_rafRender) return;
+    _rafRender = requestAnimationFrame(() => { _rafRender = 0; if (active()) render(); });
+  }
+
   function bind3DInteraction() {
     if (_wf3dBound) return;
     const canvas = document.getElementById("spa-waterfall-canvas");
@@ -524,7 +619,7 @@ const SpectrumTab = (() => {
       lx = e.clientX; ly = e.clientY;
       _d3.skewX  = Math.max(-1, Math.min(1, _d3.skewX + dx * 0.004));
       _d3.depthY = Math.max(0.25, Math.min(0.92, _d3.depthY + dy * 0.003));
-      draw3DWaterfall();
+      schedule3D();          // rAF 合併：一幀最多重繪一次
     });
     const stop = e => { dragging = false; try { canvas.releasePointerCapture(e.pointerId); } catch (_) {} };
     canvas.addEventListener("pointerup", stop);
@@ -546,7 +641,7 @@ const SpectrumTab = (() => {
       nets.forEach(n => { byCh[n.channel] = (byCh[n.channel] || 0) + 1; });
       const busiest = Object.entries(byCh).sort((a, b) => b[1] - a[1])[0];
       document.getElementById("spa-busiest").innerHTML =
-        `ch${busiest[0]} <span style="font-size:11px;color:var(--text-2)">${busiest[1]} AP</span>`;
+        `ch${escHtml(busiest[0])} <span style="font-size:11px;color:var(--text-2)">${escHtml(busiest[1])} AP</span>`;
     } else {
       document.getElementById("spa-strongest").textContent = "—";
       document.getElementById("spa-busiest").textContent   = "—";
@@ -609,9 +704,12 @@ const SpectrumTab = (() => {
 
   function enterPlayback() {
     if (_recording) toggleRecord();
+    stopPlay();
     _mode = "playback";
-    _playing = false;
     _playIdx = 0;
+    resetSpectrumState();        // 新的 _recBuf：增量狀態作廢
+    // 載入時一次算好每個 sweep 的 bins（錄製來的已在錄製時快取），之後 seek 只做累加
+    for (let i = 0; i < _recBuf.length; i++) sweepBins(i);
     document.getElementById("spa-playback").hidden = false;
     document.getElementById("spa-record").disabled = true;
     const seek = document.getElementById("spa-seek");
@@ -630,23 +728,45 @@ const SpectrumTab = (() => {
     render();
   }
 
-  // 重建到第 idx 個 sweep：重放 [idx-MAX_ROWS+1 .. idx]，並從 0..idx 累積 maxHold/avg
+  // 第 i 個 sweep 在目前頻段的 bins（快取；換頻段時自動重算）
+  function sweepBins(i) {
+    const sw = _recBuf[i];
+    const c = _binCache.get(sw);
+    if (c && c.band === _band) return c.bins;
+    const bins = computeBins(sw.nets || []);
+    _binCache.set(sw, { band: _band, bins });
+    return bins;
+  }
+
+  function accumulate(bins) {
+    for (let b = 0; b < N_BINS; b++) {
+      if (bins[b] > _maxHold[b]) _maxHold[b] = bins[b];
+      _avgBins[b] = _avgInit ? _avgBins[b] * (1 - AVG_A) + bins[b] * AVG_A : bins[b];
+    }
+    _avgInit = true;
+  }
+
+  // 重建到第 idx 個 sweep：rows = [idx-MAX_ROWS+1 .. idx]，maxHold/avg 從 0..idx 累積
+  // （呈現「到目前為止」的保持與平均）。連續播放 idx = 上一格 + 1 時只增量處理一個
+  // sweep；跳轉（seek）則用快取的 bins 重新累積，不再每格重算 computeBins。
   function loadFrame(idx) {
     idx = Math.max(0, Math.min(_recBuf.length - 1, idx));
     _playIdx = idx;
-    resetSpectrumState();
-    const start = Math.max(0, idx - MAX_ROWS + 1);
-    // maxHold / avg 從頭累積（呈現「到目前為止」的保持與平均）
-    for (let i = 0; i <= idx; i++) {
-      const nets = _recBuf[i].nets || [];
-      const bins = computeBins(nets);
-      for (let b = 0; b < N_BINS; b++) {
-        if (bins[b] > _maxHold[b]) _maxHold[b] = bins[b];
-        _avgBins[b] = _avgInit ? _avgBins[b] * (1 - AVG_A) + bins[b] * AVG_A : bins[b];
+    if (_pbAccIdx >= 0 && idx === _pbAccIdx + 1 && _pbAccBand === _band) {
+      const bins = sweepBins(idx);
+      accumulate(bins);
+      _rows.unshift({ bins });
+      if (_rows.length > MAX_ROWS) _rows.length = MAX_ROWS;
+    } else if (!(_pbAccIdx === idx && _pbAccBand === _band)) {
+      resetSpectrumState();
+      const start = Math.max(0, idx - MAX_ROWS + 1);
+      for (let i = 0; i <= idx; i++) {
+        const bins = sweepBins(i);
+        accumulate(bins);
+        if (i >= start) _rows.unshift({ bins });
       }
-      _avgInit = true;
-      if (i >= start) { _rows.unshift({ bins }); }
     }
+    _pbAccIdx = idx; _pbAccBand = _band;
     _lastNets = _recBuf[idx].nets || [];
     _sweeps = idx + 1;
     document.getElementById("spa-seek").value = String(idx);
@@ -656,20 +776,39 @@ const SpectrumTab = (() => {
   }
 
   function playStep() {
+    // 分頁 / 視窗不可見：暫停計時器，回到可見時再續播（見 resumePlayIfVisible）
+    if (!active() || document.hidden) {
+      if (_playTimer) { clearInterval(_playTimer); _playTimer = null; }
+      _playSuspended = true;
+      return;
+    }
     if (_playIdx >= _recBuf.length - 1) { stopPlay(); return; }
     loadFrame(_playIdx + 1);
+  }
+
+  function startPlayTimer() {
+    const iv = (parseFloat(document.getElementById("spa-interval").value) || 2) * 1000;
+    _playTimer = setInterval(playStep, Math.max(200, iv));
   }
 
   function startPlay() {
     if (_playIdx >= _recBuf.length - 1) loadFrame(0);
     _playing = true;
+    _playSuspended = false;
     document.getElementById("spa-play").textContent = "❚❚ 暫停";
-    const iv = (parseFloat(document.getElementById("spa-interval").value) || 2) * 1000;
-    _playTimer = setInterval(playStep, Math.max(200, iv));
+    startPlayTimer();
+  }
+
+  function resumePlayIfVisible() {
+    if (_playing && _playSuspended && !_playTimer && active() && !document.hidden) {
+      _playSuspended = false;
+      startPlayTimer();
+    }
   }
 
   function stopPlay() {
     _playing = false;
+    _playSuspended = false;
     if (_playTimer) { clearInterval(_playTimer); _playTimer = null; }
     const btn = document.getElementById("spa-play");
     if (btn) btn.textContent = "▶ 播放";
@@ -718,6 +857,7 @@ const SpectrumTab = (() => {
     _maxHold = new Float32Array(N_BINS);
     _avgBins = new Float32Array(N_BINS);
     _avgInit = false;
+    _pbAccIdx = -1;      // 回放下一格整段重建（與原本每格重建的行為一致）
     render();
   });
 
@@ -748,9 +888,13 @@ const SpectrumTab = (() => {
   // 回放控制
   document.getElementById("spa-play").addEventListener("click", () =>
     _playing ? stopPlay() : startPlay());
+  // 拖曳進度條：rAF 合併，一幀最多載入一次
+  let _seekRaf = 0, _seekIdx = 0;
   document.getElementById("spa-seek").addEventListener("input", e => {
     stopPlay();
-    loadFrame(parseInt(e.target.value, 10) || 0);
+    _seekIdx = parseInt(e.target.value, 10) || 0;
+    if (_seekRaf) return;
+    _seekRaf = requestAnimationFrame(() => { _seekRaf = 0; loadFrame(_seekIdx); });
   });
   document.getElementById("spa-exit-play").addEventListener("click", exitPlayback);
 
@@ -763,8 +907,9 @@ const SpectrumTab = (() => {
 
   // 切到本分頁時立即重繪（canvas 在隱藏時量不到尺寸）
   document.querySelector('.nav-item[data-tab="spectrumtab"]')
-    ?.addEventListener("click", () => setTimeout(render, 50));
-  window.addEventListener("resize", () => { if (active()) render(); });
+    ?.addEventListener("click", () => setTimeout(() => { render(); resumePlayIfVisible(); }, 50));
+  document.addEventListener("visibilitychange", resumePlayIfVisible);
+  window.addEventListener("resize", scheduleRender);   // rAF 合併 resize 重繪
 
   tick();   // start loop（非 active 時只是空轉計時器）
 

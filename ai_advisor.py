@@ -12,6 +12,7 @@ Provider 鏈（自動降級）：
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 
@@ -155,35 +156,96 @@ def codex_available() -> bool:
     return shutil.which("codex") is not None
 
 
+def _kill_tree(proc: subprocess.Popen):
+    """codex 是 node shim → 原生子程序；只殺 shim 會留下孤兒繼續耗額度。
+    以 session（process group）為單位：先 SIGTERM，3 秒後仍在就 SIGKILL。"""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, OSError):
+        pgid = None
+    if pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        pass
+    if pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGKILL)   # 連同已脫離 shim 的子孫一起收掉
+        except (ProcessLookupError, OSError):
+            pass
+    try:
+        proc.kill()
+        proc.communicate(timeout=1)   # 收回管線與殭屍程序
+    except Exception:
+        pass
+
+
+def _run_codex(cmd: list, prompt: str, timeout: float) -> bool:
+    """執行 codex；逾時則終止整個程序群組。回傳是否在時限內結束。"""
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)
+    try:
+        proc.communicate(input=prompt, timeout=timeout)
+        return True
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        return False
+    except BaseException:
+        _kill_tree(proc)
+        raise
+
+
+def _validate(result) -> dict | None:
+    """Codex 輸出驗證：必須是 dict 且 items 為非空的 dict 清單，否則交給規則引擎。"""
+    if not isinstance(result, dict):
+        return None
+    items = result.get("items")
+    if not isinstance(items, list):
+        return None
+    items = [i for i in items if isinstance(i, dict)]
+    if not items:
+        return None
+    score = result.get("score")
+    try:
+        score = max(0, min(100, int(score)))
+    except (TypeError, ValueError):
+        score = 0
+    summary = result.get("summary")
+    return {**result, "items": items, "score": score,
+            "summary": summary if isinstance(summary, str) else ""}
+
+
 def _codex_analyze(payload: dict) -> dict | None:
     codex = shutil.which("codex")
     if not codex:
         return None
-    with tempfile.TemporaryDirectory() as tmp:
-        schema_path = os.path.join(tmp, "schema.json")
-        out_path    = os.path.join(tmp, "out.json")
-        with open(schema_path, "w") as f:
-            json.dump(_SCHEMA, f)
-        prompt = _PROMPT + json.dumps(payload, ensure_ascii=False, indent=1)
-        try:
-            subprocess.run(
-                [codex, "exec",
-                 "--sandbox", "read-only",
-                 "--skip-git-repo-check",
-                 "-C", tmp,
-                 "--output-schema", schema_path,
-                 "--output-last-message", out_path,
-                 "-"],
-                input=prompt, text=True, capture_output=True,
-                timeout=CODEX_TIMEOUT,
-            )
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            schema_path = os.path.join(tmp, "schema.json")
+            out_path    = os.path.join(tmp, "out.json")
+            with open(schema_path, "w") as f:
+                json.dump(_SCHEMA, f)
+            prompt = _PROMPT + json.dumps(payload, ensure_ascii=False, indent=1)
+            if not _run_codex(
+                    [codex, "exec",
+                     "--sandbox", "read-only",
+                     "--skip-git-repo-check",
+                     "-C", tmp,
+                     "--output-schema", schema_path,
+                     "--output-last-message", out_path,
+                     "-"],
+                    prompt, CODEX_TIMEOUT):
+                return None
             with open(out_path) as f:
                 result = json.load(f)
-        except Exception:
-            return None
-    if not isinstance(result.get("items"), list) or not result["items"]:
+        return _validate(result)
+    except Exception:
         return None
-    return result
 
 
 # ── Provider 2: 離線規則引擎（recommender 映射）──────────────────────────────
@@ -231,5 +293,6 @@ def analyze(networks: list, analysis: dict, current: dict, netperf: dict,
 
     # 排序：immediate → adjust → ok
     order = {"immediate": 0, "adjust": 1, "ok": 2}
-    result["items"].sort(key=lambda i: order.get(i.get("priority"), 9))
+    result["items"].sort(key=lambda i: order.get(i.get("priority"), 9)
+                         if isinstance(i, dict) else 9)
     return {"ok": True, "provider": provider, **result}

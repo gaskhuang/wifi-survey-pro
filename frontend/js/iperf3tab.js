@@ -12,11 +12,10 @@ let _srvLogPoll = null;
 // ── Track live data ───────────────────────────────────────────────────────────
 const _live = { mbps: [], retr: 0, startTs: 0, duration: 10 };
 
-// ── Init: check iperf3 and pre-fill IP ───────────────────────────────────────
-(async function ip3Init() {
+// ── Init: check iperf3 and pre-fill IP（延遲到第一次開啟 iperf3 分頁才執行）──
+async function ip3Init() {
   try {
-    const r = await fetch("/api/iperf/check");
-    const d = await r.json();
+    const d = await fetchJSON("/api/iperf/check", {}, 10000);
     if (!d.installed) {
       document.getElementById("ip3-install-note").classList.remove("hidden");
       document.getElementById("ip3-run-btn").disabled = true;
@@ -25,29 +24,35 @@ const _live = { mbps: [], retr: 0, startTs: 0, duration: 10 };
     if (d.local_ips?.length) document.getElementById("ip3-target").value = d.local_ips[0];
 
     // Restore server state if still running
-    const s = await fetch("/api/iperf/server/status").then(r => r.json());
+    const s = await fetchJSON("/api/iperf/server/status", {}, 8000);
     if (s.running) _applySrvRunning(s);
   } catch (_) {}
-})();
+}
+onTabFirstActive("iperf", ip3Init);
 
 // ── Server toggle ─────────────────────────────────────────────────────────────
 document.getElementById("ip3-srv-btn").addEventListener("click", async () => {
   const btn = document.getElementById("ip3-srv-btn");
   btn.disabled = true;
-  if (_srvRunning) {
-    await fetch("/api/iperf/server/stop", { method: "POST" });
-    _applySrvStopped();
-  } else {
-    const port = parseInt(document.getElementById("ip3-srv-port").value) || 5201;
-    const r    = await fetch("/api/iperf/server/start", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ port }),
-    });
-    const d = await r.json();
-    if (d.ok) _applySrvRunning(d);
-    else alert(`Server 啟動失敗：${d.error}`);
+  try {
+    if (_srvRunning) {
+      await fetch("/api/iperf/server/stop", { method: "POST" });
+      _applySrvStopped();
+    } else {
+      const port = parseInt(document.getElementById("ip3-srv-port").value) || 5201;
+      const r    = await fetch("/api/iperf/server/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ port }),
+      });
+      const d = await r.json();
+      if (d.ok) _applySrvRunning(d);
+      else alert(`Server 啟動失敗：${d.error}`);
+    }
+  } catch (e) {
+    alert(`Server 操作失敗：${e.message}`);
+  } finally {
+    btn.disabled = false;
   }
-  btn.disabled = false;
 });
 
 function _applySrvRunning(data) {
@@ -63,7 +68,7 @@ function _applySrvRunning(data) {
 
   const cmd = `iperf3 -c ${ips[0] || "?"} -p ${port}`;
   document.getElementById("ip3-ip-row").innerHTML =
-    ips.map(ip => `<span class="ip3-ip-chip">${ip}</span>`).join("");
+    ips.map(ip => `<span class="ip3-ip-chip">${escHtml(ip)}</span>`).join("");
   document.getElementById("ip3-cmd").textContent         = cmd;
   document.getElementById("ip3-cmd").dataset.cmd         = cmd;
   document.getElementById("ip3-srv-info").classList.remove("hidden");
@@ -77,7 +82,7 @@ function _applySrvRunning(data) {
 
 function _applySrvStopped() {
   _srvRunning = false;
-  if (_srvLogPoll) { clearInterval(_srvLogPoll); _srvLogPoll = null; }
+  if (_srvLogPoll) { clearTimeout(_srvLogPoll); _srvLogPoll = null; }
   document.getElementById("ip3-dot").className       = "ip3-dot";
   document.getElementById("ip3-dot-label").textContent = "已停止";
   document.getElementById("ip3-dot-label").className  = "ip3-dot-label";
@@ -88,17 +93,55 @@ function _applySrvStopped() {
   document.getElementById("ip3-srv-log-wrap").classList.add("hidden");
 }
 
+// Server 狀態 / log 輪詢：鏈式 setTimeout（不重疊）；只在 iperf3 分頁可見時抓，
+// 單次請求失敗不當成「已停止」——只有伺服器明確回 running:false 才切換狀態。
+const SRV_POLL_MS = 2000, SRV_POLL_MAX_MS = 15000;
+let _srvFails = 0;
+
+function _ip3Visible() {
+  return !document.hidden && document.getElementById("tab-iperf")?.classList.contains("active");
+}
+
 function _startSrvLogPoll() {
-  if (_srvLogPoll) clearInterval(_srvLogPoll);
-  _srvLogPoll = setInterval(async () => {
-    const s = await fetch("/api/iperf/server/status").then(r => r.json()).catch(() => ({}));
-    if (!s.running) { _applySrvStopped(); return; }
+  if (_srvLogPoll) clearTimeout(_srvLogPoll);
+  _srvFails = 0;
+  _srvLogPoll = setTimeout(_srvPollOnce, SRV_POLL_MS);
+}
+
+async function _srvPollOnce() {
+  _srvLogPoll = null;
+  if (!_srvRunning) return;
+  if (!_ip3Visible()) { _srvLogPoll = setTimeout(_srvPollOnce, SRV_POLL_MS); return; }
+  let s;
+  try {
+    s = await fetchJSON("/api/iperf/server/status", {}, 8000);
+    _srvFails = 0;
+  } catch (_) {
+    _srvFails++;
+  }
+  if (!_srvRunning) return;                        // 輪詢期間使用者已按停止
+  if (s && !s.running) { _applySrvStopped(); return; }
+  const lbl = document.getElementById("ip3-dot-label");
+  if (s) {
+    lbl.textContent = `運行中 :${s.port || document.getElementById("ip3-port").value || 5201}`;
     const logEl = document.getElementById("ip3-srv-log");
     logEl.innerHTML = (s.log || []).slice(-10).map(l =>
       `<div>${escHtml(l)}</div>`).join("");
     logEl.scrollTop = logEl.scrollHeight;
-  }, 2000);
+  } else if (_srvFails >= 3) {
+    lbl.textContent = "狀態未知（重試中…）";
+  }
+  // 連續失敗時逐步拉長間隔（2s → 最多 15s），恢復後回到 2s
+  const delay = Math.min(SRV_POLL_MAX_MS, SRV_POLL_MS * 2 ** Math.min(_srvFails, 3));
+  _srvLogPoll = setTimeout(_srvPollOnce, delay);
 }
+
+// 切回 iperf3 分頁 / 視窗回到前景時立即更新一次
+function _srvPollNow() {
+  if (_srvRunning && _ip3Visible()) { clearTimeout(_srvLogPoll); _srvPollOnce(); }
+}
+window.addEventListener("tab:activated", e => { if (e.detail?.tab === "iperf") _srvPollNow(); });
+document.addEventListener("visibilitychange", _srvPollNow);
 
 window.ip3Copy = () => {
   const cmd = document.getElementById("ip3-cmd").dataset.cmd || "";
@@ -176,21 +219,29 @@ function ip3Run() {
     _renderAnalysis(analysis);
   });
 
-  _ip3Sse.addEventListener("error_event", e => {
-    const d = JSON.parse(e.data);
-    _logLine(`錯誤：${d.message}`, "error");
+  // 後端 stream_test 送的是 `event: error`（iperf3_mgr.py），與 EventSource 傳輸層錯誤同名：
+  // 有 e.data → 伺服器送來的錯誤訊息（之後還會收到 done）；沒有 → 連線中斷。
+  const es = _ip3Sse;
+  es.addEventListener("error", e => {
+    if (_ip3Sse !== es) return;
+    if (e.data) {
+      let msg = e.data;
+      try { msg = JSON.parse(e.data).message || msg; } catch (_) {}
+      _logLine(`錯誤：${msg}`, "error");
+      _finish(runBtn);
+      return;
+    }
+    // 傳輸錯誤：關閉避免 EventSource 自動重連而重跑一次測試
+    _logLine("連線中斷（測試串流已結束或伺服器無回應）", "error");
     _finish(runBtn);
+    es.close(); _ip3Sse = null;
   });
 
-  _ip3Sse.addEventListener("done", () => {
+  es.addEventListener("done", () => {
     _finish(runBtn);
-    _ip3Sse.close(); _ip3Sse = null;
+    es.close();
+    if (_ip3Sse === es) _ip3Sse = null;
   });
-
-  _ip3Sse.onerror = () => {
-    _finish(runBtn);
-    if (_ip3Sse) { _ip3Sse.close(); _ip3Sse = null; }
-  };
 }
 
 function _finish(runBtn) {
@@ -323,7 +374,7 @@ function _clearAnalysis() {
 function _renderAnalysis(data) {
   if (!data.ok) {
     document.getElementById("ip3-recs").innerHTML =
-      `<div class="ip3-rec critical"><span class="ip3-rec-icon">🔴</span><span class="ip3-rec-text">分析失敗：${data.error}</span></div>`;
+      `<div class="ip3-rec critical"><span class="ip3-rec-icon">🔴</span><span class="ip3-rec-text">分析失敗：${escHtml(data.error)}</span></div>`;
     document.getElementById("ip3-analysis").classList.remove("hidden");
     return;
   }
@@ -332,34 +383,34 @@ function _renderAnalysis(data) {
   const mode = data.mode;
   let cardsHtml = `
     <div class="ip3-score-card">
-      <div class="ip3-score-val" style="color:${_speedColor(data.avg_mbps)}">${data.avg_mbps}</div>
+      <div class="ip3-score-val" style="color:${_speedColor(data.avg_mbps)}">${escHtml(data.avg_mbps)}</div>
       <div class="ip3-score-unit">Mbps 平均</div>
-      <div class="ip3-score-label">${data.speed_tier?.label || ""}</div>
+      <div class="ip3-score-label">${escHtml(data.speed_tier?.label || "")}</div>
     </div>
     <div class="ip3-score-card">
-      <div class="ip3-score-val" style="color:${_speedColor(data.peak_mbps)}">${data.peak_mbps}</div>
+      <div class="ip3-score-val" style="color:${_speedColor(data.peak_mbps)}">${escHtml(data.peak_mbps)}</div>
       <div class="ip3-score-unit">Mbps 峰值</div>
     </div>
     <div class="ip3-score-card">
-      <div class="ip3-score-val" style="color:${data.stability_cv > 20 ? "#ef4444" : data.stability_cv > 10 ? "#eab308" : "#22c55e"}">±${data.stability_cv}%</div>
+      <div class="ip3-score-val" style="color:${data.stability_cv > 20 ? "#ef4444" : data.stability_cv > 10 ? "#eab308" : "#22c55e"}">±${escHtml(data.stability_cv)}%</div>
       <div class="ip3-score-unit">速率波動</div>
     </div>`;
 
   if (mode === "udp") {
     cardsHtml += `
       <div class="ip3-score-card">
-        <div class="ip3-score-val" style="color:${data.avg_jitter_ms > 20 ? "#ef4444" : data.avg_jitter_ms > 5 ? "#eab308" : "#22c55e"}">${data.avg_jitter_ms}</div>
+        <div class="ip3-score-val" style="color:${data.avg_jitter_ms > 20 ? "#ef4444" : data.avg_jitter_ms > 5 ? "#eab308" : "#22c55e"}">${escHtml(data.avg_jitter_ms)}</div>
         <div class="ip3-score-unit">ms Jitter</div>
       </div>
       <div class="ip3-score-card">
-        <div class="ip3-score-val" style="color:${data.avg_lost_pct > 2 ? "#ef4444" : data.avg_lost_pct > 0.5 ? "#eab308" : "#22c55e"}">${data.avg_lost_pct}%</div>
+        <div class="ip3-score-val" style="color:${data.avg_lost_pct > 2 ? "#ef4444" : data.avg_lost_pct > 0.5 ? "#eab308" : "#22c55e"}">${escHtml(data.avg_lost_pct)}%</div>
         <div class="ip3-score-unit">封包遺失</div>
       </div>`;
   } else {
     const retr = data.total_retransmits || 0;
     cardsHtml += `
       <div class="ip3-score-card">
-        <div class="ip3-score-val" style="color:${retr > 50 ? "#ef4444" : retr > 10 ? "#eab308" : "#22c55e"}">${retr}</div>
+        <div class="ip3-score-val" style="color:${retr > 50 ? "#ef4444" : retr > 10 ? "#eab308" : "#22c55e"}">${escHtml(retr)}</div>
         <div class="ip3-score-unit">TCP 重傳次數</div>
       </div>`;
   }
@@ -378,9 +429,9 @@ function _renderAnalysis(data) {
     return `<div class="ip3-rating-row">
       <span class="ip3-rating-name">${name}</span>
       <div class="ip3-rating-bar-bg">
-        <div class="ip3-rating-bar-fill" style="width:${r.score}%;background:${r.color}"></div>
+        <div class="ip3-rating-bar-fill" style="width:${Number(r.score) || 0}%;background:${escHtml(r.color)}"></div>
       </div>
-      <span class="ip3-rating-tag" style="color:${r.color}">${r.label}</span>
+      <span class="ip3-rating-tag" style="color:${escHtml(r.color)}">${escHtml(r.label)}</span>
     </div>`;
   }).join("");
 
@@ -388,15 +439,15 @@ function _renderAnalysis(data) {
   const uses = data.use_cases || [];
   document.getElementById("ip3-usecases").innerHTML = uses.length
     ? `<div style="font-size:10px;color:var(--text-3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px">適合用途</div>` +
-      uses.map(u => `<span class="ip3-usecase-chip">${u}</span>`).join("")
+      uses.map(u => `<span class="ip3-usecase-chip">${escHtml(u)}</span>`).join("")
     : "";
 
   // ── Recommendations ────────────────────────────────────────────────────────
   const recs = data.recommendations || [];
   document.getElementById("ip3-recs").innerHTML = recs.map(r => `
-    <div class="ip3-rec ${r.level}">
-      <span class="ip3-rec-icon">${r.icon || "•"}</span>
-      <span class="ip3-rec-text">${r.text}</span>
+    <div class="ip3-rec ${escHtml(r.level)}">
+      <span class="ip3-rec-icon">${escHtml(r.icon || "•")}</span>
+      <span class="ip3-rec-text">${escHtml(r.text)}</span>
     </div>`).join("");
 
   document.getElementById("ip3-analysis").classList.remove("hidden");
