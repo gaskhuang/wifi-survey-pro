@@ -1,99 +1,29 @@
-name: Build — macOS DMG + Windows EXE
+name: Build — macOS DMG
+
+# 每次推送都打包一次並上傳成 artifact，用來確認「乾淨環境也能打包成功」。
+# 正式發佈改為人工：本機打包 → 驗證能在乾淨環境啟動 → gh release create。
+# （Windows 版目前暫緩；日後恢復時可參考 git 歷史中的 build-windows job 與 build_windows.bat。）
 
 on:
   push:
     branches: [master, main]
-    tags:     ["v*"]
   workflow_dispatch:
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────
-  # Windows — PyInstaller → ZIP
-  # ─────────────────────────────────────────────────────────────────────────
-  build-windows:
-    name: Windows EXE
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install `
-            flask Pillow numpy scipy reportlab `
-            ping3 dnspython mac-vendor-lookup `
-            pywebview pyinstaller
-
-      - name: Build EXE
-        run: |
-          pyinstaller `
-            --name "WiFi Survey Pro" `
-            --onedir --windowed `
-            --distpath dist_win `
-            --workpath build_win `
-            --noconfirm `
-            --add-data "frontend;frontend" `
-            --add-data "scanner_windows.py;." `
-            --hidden-import flask `
-            --hidden-import werkzeug `
-            --hidden-import jinja2 `
-            --hidden-import PIL `
-            --hidden-import numpy `
-            --hidden-import scipy `
-            --hidden-import scipy.spatial `
-            --hidden-import scipy.interpolate `
-            --hidden-import reportlab `
-            --hidden-import dns.resolver `
-            --hidden-import ping3 `
-            --hidden-import mac_vendor_lookup `
-            --hidden-import webview `
-            --hidden-import webview.platforms.winforms `
-            --collect-all webview `
-            --collect-all flask `
-            --collect-all reportlab `
-            --collect-all mac_vendor_lookup `
-            main.py
-
-      - name: Package as ZIP
-        run: |
-          Compress-Archive `
-            -Path "dist_win\WiFi Survey Pro\*" `
-            -DestinationPath "dist_win\WiFiSurveyPro-Windows.zip" `
-            -Force
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: WiFiSurveyPro-Windows
-          path: dist_win/WiFiSurveyPro-Windows.zip
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # macOS — shell-script .app → DMG
-  # ─────────────────────────────────────────────────────────────────────────
   build-macos:
-    name: macOS DMG
-    runs-on: macos-14          # Apple Silicon runner
+    name: macOS DMG (Apple Silicon)
+    runs-on: macos-14            # Apple Silicon runner
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      # build_dmg.sh 會自行下載並以 SHA256 驗證 python-build-standalone，
+      # 不需要（也不應該）用 setup-python：那會讓 bundle 綁死在 runner 的路徑上。
+      - name: Cache standalone Python
+        uses: actions/cache@v4
         with:
-          python-version: "3.11"
-
-      - name: Create venv + install deps
-        run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install --quiet --upgrade pip
-          pip install --quiet -r requirements.txt
+          path: build/pbs-cache
+          key: pbs-${{ hashFiles('build_dmg.sh') }}
 
       - name: Build .app + DMG
         run: |
@@ -103,46 +33,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WiFiSurveyPro-macOS
+          name: NetInspectPro-macOS
           path: "dist/NetInspect Pro.dmg"
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # Release — attach both artifacts when a tag is pushed
-  # ─────────────────────────────────────────────────────────────────────────
-  release:
-    name: Create Release
-    needs: [build-windows, build-macos]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-
-    steps:
-      - name: Download macOS DMG
-        uses: actions/download-artifact@v4
-        with:
-          name: WiFiSurveyPro-macOS
-          path: artifacts/
-
-      - name: Download Windows ZIP
-        uses: actions/download-artifact@v4
-        with:
-          name: WiFiSurveyPro-Windows
-          path: artifacts/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*
-          body: |
-            ## NetInspect Pro ${{ github.ref_name }}
-
-            ### 下載
-            | 平台 | 檔案 |
-            |------|------|
-            | macOS | `NetInspect Pro.dmg` — 拖到 Applications 安裝 |
-            | Windows | `WiFiSurveyPro-Windows.zip` — 解壓後執行 `WiFi Survey Pro.exe` |
-
-            ### macOS 首次開啟
-            右鍵 > 開啟，或執行：
-            ```
-            xattr -d com.apple.quarantine "/Applications/NetInspect Pro.app"
-            ```

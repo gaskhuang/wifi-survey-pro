@@ -2,9 +2,13 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # NetInspect Pro — Build macOS .app + DMG
 #
-# Strategy: embed the venv inside the .app bundle (no PyInstaller/py2app).
-# Works on the machine it's built on; same Python version guaranteed.
+# 策略：內嵌「可攜式 CPython」（python-build-standalone，官方 astral-sh 發行版），
+#       依賴裝進它自己的 site-packages。整個 App 不引用任何外部路徑，
+#       拿到沒裝 Homebrew / Python 的 Mac 也能直接執行。
+#       （舊做法 `venv --copies` 只複製 52 KB 啟動器，stdlib 與 libpython 仍指向
+#        建置機的 Homebrew，別台 Mac 一開就閃退。）
 #
+# 需求：macOS（Apple Silicon）、curl、shasum。產物只支援 Apple Silicon。
 # Usage:   ./build_dmg.sh
 # Output:  dist/NetInspect Pro.dmg
 # ═══════════════════════════════════════════════════════════════════════════
@@ -12,10 +16,18 @@ set -euo pipefail
 
 APP_NAME="NetInspect Pro"
 BUNDLE_ID="tw.zonetech.netinspect-pro"
-VERSION="3.0.1"
+VERSION="3.1.0"
+
+# ── 可攜式 Python（版本與 SHA256 鎖定；升級時三個值一起改）──────────────────
+PBS_TAG="20261026"
+PY_FULL="3.13.18"
+PBS_SHA256="8392b6ea51d94391befb2c31ebe75463f045d0b69dfcf5e1bb3234e1f5fa3405"
+PBS_FILE="cpython-${PY_FULL}+${PBS_TAG}-aarch64-apple-darwin-install_only_stripped.tar.gz"
+PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/cpython-${PY_FULL}%2B${PBS_TAG}-aarch64-apple-darwin-install_only_stripped.tar.gz"
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST_DIR="$SRC_DIR/dist"
+CACHE_DIR="$SRC_DIR/build/pbs-cache"          # build/ 已在 .gitignore
 APP_BUNDLE="$DIST_DIR/${APP_NAME}.app"
 DMG_OUT="$DIST_DIR/${APP_NAME}.dmg"
 
@@ -26,96 +38,133 @@ error() { echo -e "${RED}✗  $*${NC}"; exit 1; }
 
 # ── 0. Checks ───────────────────────────────────────────────────────────────
 [[ "$(uname)" == "Darwin" ]] || error "Must run on macOS"
-[[ -d "$SRC_DIR/.venv" ]]    || error ".venv not found — run ./install.sh first"
-
-PYTHON="$SRC_DIR/.venv/bin/python3"
-PY_VER=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-info "Python $PY_VER | $(uname -m)"
+[[ "$(uname -m)" == "arm64" ]] || error "需在 Apple Silicon 上建置（產物為 arm64）"
+for c in curl shasum tar codesign hdiutil otool vtool; do
+    command -v "$c" >/dev/null || error "缺少指令：$c"
+done
 
 # ── 1. Clean ────────────────────────────────────────────────────────────────
 info "Cleaning dist/…"
 rm -rf "$DIST_DIR"
-mkdir -p "$DIST_DIR"
-
-# ── 2. Build .app structure ──────────────────────────────────────────────────
-info "Building ${APP_NAME}.app…"
+mkdir -p "$DIST_DIR" "$CACHE_DIR"
 
 CONTENTS="$APP_BUNDLE/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 APP_RES="$RESOURCES/app"
-
+PYROOT="$RESOURCES/python"
+BPY="$PYROOT/bin/python3"
 mkdir -p "$MACOS" "$RESOURCES" "$APP_RES"
 
-# ── 3. Copy Python source files ──────────────────────────────────────────────
+# ── 2. 可攜式 Python：下載（有快取就沿用）→ 驗證 SHA256 → 解壓進 bundle ────────
+if [[ ! -f "$CACHE_DIR/$PBS_FILE" ]]; then
+    info "Downloading CPython $PY_FULL (python-build-standalone $PBS_TAG)…"
+    curl -fsSL --retry 3 -o "$CACHE_DIR/$PBS_FILE.part" "$PBS_URL"
+    mv "$CACHE_DIR/$PBS_FILE.part" "$CACHE_DIR/$PBS_FILE"
+fi
+echo "$PBS_SHA256  $CACHE_DIR/$PBS_FILE" | shasum -a 256 -c - >/dev/null \
+    || { rm -f "$CACHE_DIR/$PBS_FILE"; error "SHA256 不符（已刪除快取），請重新執行"; }
+info "CPython $PY_FULL 驗證通過，解壓中…"
+TMPX=$(mktemp -d)
+tar -xzf "$CACHE_DIR/$PBS_FILE" -C "$TMPX"
+mv "$TMPX/python" "$PYROOT"
+rm -rf "$TMPX"
+"$BPY" -c "import sys; assert sys.version_info[:2] == (3, 13)" || error "內嵌 Python 無法執行"
+
+# ── 3. 原始碼 + 前端 + 資料 ──────────────────────────────────────────────────
+# 一律帶上全部 .py（舊版手寫清單曾漏掉模組，導致打包後一開就崩）；setup.py 只供開發用
 info "Copying source files…"
-SOURCE_FILES=(
-    main.py server.py scanner.py analyzer.py
-    heatmap_gen.py reporter.py recommender.py recommendations.py
-    iperf3_mgr.py stability.py speedtest_cf.py ai_advisor.py
-    lan_scanner.py platform_caps.py
-    config.py ai_providers.py traffic_monitor.py net_diag.py
-)
-for f in "${SOURCE_FILES[@]}"; do
-    [[ -f "$SRC_DIR/$f" ]] && cp "$SRC_DIR/$f" "$APP_RES/" || warn "Missing: $f"
+for f in "$SRC_DIR"/*.py; do
+    [[ "$(basename "$f")" == "setup.py" ]] && continue
+    cp "$f" "$APP_RES/"
 done
+cp -R "$SRC_DIR/frontend" "$APP_RES/frontend"
+[[ -d "$SRC_DIR/data" ]] && cp -R "$SRC_DIR/data" "$APP_RES/data"
+[[ -f "$APP_RES/data/oui.txt" ]] || error "缺少 data/oui.txt（離線廠牌資料庫）"
 
-# Copy frontend
-info "Copying frontend…"
-cp -r "$SRC_DIR/frontend" "$APP_RES/frontend"
+# ── 4. 安裝依賴（只用預先編好的 wheel、版本完全鎖定）────────────────────────────
+info "Installing dependencies…"
+# proxy_tools（pywebview 相依）只有純 Python 原始碼套件，僅對它允許原始碼安裝
+"$BPY" -m pip install --quiet --no-cache-dir --disable-pip-version-check \
+    --only-binary=:all: --no-binary=proxy_tools --no-compile -r "$SRC_DIR/requirements.txt"
 
-# Copy data (bundled OUI database for offline vendor lookup)
-# 斷言離線 OUI 資料庫存在且非空，否則現場離線掃描會退回連網下載而卡住
-[[ -s "$SRC_DIR/data/oui.txt" ]] || error "data/oui.txt 缺失或為空——離線 OUI 廠牌查詢會失效，中止打包"
-info "Copying data (OUI database)…"
-cp -r "$SRC_DIR/data" "$APP_RES/data"
+# ── 5. 瘦身：拿掉執行期用不到的東西 ─────────────────────────────────────────────
+info "Trimming bundle…"
+SP="$PYROOT/lib/python3.13/site-packages"
+STD="$PYROOT/lib/python3.13"
+"$BPY" -m pip uninstall --quiet -y pip >/dev/null 2>&1 || true
+rm -rf "$SP"/pip "$SP"/pip-*.dist-info "$SP"/PyObjCTest
+find "$SP" -type d \( -name tests -o -name test \) -prune -exec rm -rf {} +
+rm -rf "$STD/test" "$STD/idlelib" "$STD/tkinter" "$STD/turtledemo" "$STD/ensurepip" \
+       "$STD/turtle.py" "$STD/config-3.13-darwin" \
+       "$STD"/lib-dynload/_tkinter*.so "$STD"/lib-dynload/_test*.so \
+       "$PYROOT"/lib/tcl* "$PYROOT"/lib/tk* "$PYROOT"/lib/itcl* "$PYROOT"/lib/thread* \
+       "$PYROOT"/lib/libtcl* "$PYROOT"/lib/libtk* "$PYROOT"/lib/pkgconfig \
+       "$PYROOT/include" "$PYROOT/share"
+find "$PYROOT/bin" -mindepth 1 ! -name python3 ! -name python3.13 -exec rm -rf {} +
+find "$RESOURCES" -type d -name __pycache__ -prune -exec rm -rf {} +
 
-# ── 4. Create a relocatable Python venv inside the bundle ────────────────────
-info "Creating bundled Python venv (this may take a minute)…"
-BUNDLED_VENV="$RESOURCES/venv"
+# ── 6. 預先編譯 .pyc（執行期以 -B 禁止寫入 bundle，避免每次啟動重新編譯）──────────
+info "Precompiling bytecode…"
+"$BPY" -m compileall -q -j 0 "$APP_RES" "$STD" >/dev/null || warn "部分檔案編譯失敗（不影響執行）"
 
-# --copies ensures python binary is copied, not symlinked (makes it relocatable)
-"$PYTHON" -m venv --copies "$BUNDLED_VENV"
-
-BPYTHON="$BUNDLED_VENV/bin/python3"
-
-# Install requirements into bundled venv
-info "Installing dependencies into bundle venv…"
-"$BPYTHON" -m pip install --quiet --upgrade pip
-"$BPYTHON" -m pip install --quiet -r "$SRC_DIR/requirements.txt"
-
-# ── 5. Launcher script ───────────────────────────────────────────────────────
+# ── 7. Launcher ─────────────────────────────────────────────────────────────
 info "Writing launcher…"
-
 LAUNCHER="$MACOS/${APP_NAME}"
 cat > "$LAUNCHER" << 'BASH'
-#!/usr/bin/env bash
-# Resolve bundle paths
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESOURCES="$SCRIPT_DIR/../Resources"
-PYTHON="$RESOURCES/venv/bin/python3"
-APP="$RESOURCES/app/main.py"
-
-# Tell Python where to find app modules
-# PYTHONDONTWRITEBYTECODE：避免執行期在 bundle 內寫 .pyc，破壞程式碼簽章封印
-export PYTHONDONTWRITEBYTECODE=1
-export PYTHONPATH="$RESOURCES/app:$PYTHONPATH"
-
-# Launch
-exec "$PYTHON" "$APP"
+#!/bin/bash
+# NetInspect Pro 啟動器：使用 bundle 內嵌的 Python。
+#  -B 不寫 .pyc（bundle 唯讀且已預編譯，寫入會破壞簽章）
+#  -E 忽略使用者的 PYTHON* 環境變數（避免 PYTHONHOME/PYTHONPATH 干擾）
+#  -s 不載入使用者 site-packages
+RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
+exec "$RES/python/bin/python3" -B -E -s "$RES/app/main.py"
 BASH
-
 chmod +x "$LAUNCHER"
 
-# ── 5b. App icon（若專案根目錄有 AppIcon.icns 就帶上）──────────────────────────
 if [[ -f "$SRC_DIR/AppIcon.icns" ]]; then
-    info "Adding app icon…"
     cp "$SRC_DIR/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 fi
 
-# ── 6. Info.plist ────────────────────────────────────────────────────────────
-info "Writing Info.plist…"
+# ── 8. 驗證：不得引用 bundle 外的函式庫（Homebrew / 使用者目錄 / 其他 Python）────
+info "Verifying bundle is self-contained…"
+BAD=$(find "$APP_BUNDLE" -type f \( -name "*.so" -o -name "*.dylib" -o -perm -u+x \) -print0 \
+      | xargs -0 file 2>/dev/null | grep "Mach-O" | cut -d: -f1 \
+      | while read -r bin; do
+            # 只看相依行（以空白/tab 開頭）；多架構檔的「路徑 (architecture …):」標題行要排除
+            otool -L "$bin" 2>/dev/null \
+              | { grep -E "^[[:space:]]+(/opt/homebrew|/usr/local/|/Users/|/Library/Frameworks/Python)" || true; } \
+              | sed "s|^|$bin: |"
+        done) || true
+[[ -z "$BAD" ]] || { echo "$BAD" | head -20; error "bundle 引用了外部函式庫，無法在其他 Mac 執行"; }
 
+# 最低系統版本：取所有 Mach-O 的最大 minos（numpy 等 wheel 可能要求較新版本）
+MIN_OS=$(find "$APP_BUNDLE" -type f \( -name "*.so" -o -name "*.dylib" -o -perm -u+x \) -print0 \
+         | xargs -0 file 2>/dev/null | grep "Mach-O" | cut -d: -f1 \
+         | while read -r bin; do vtool -show-build "$bin" 2>/dev/null | awk '/minos/{print $2}' || true; done \
+         | sort -t. -k1,1n -k2,2n | tail -1) || true
+MIN_OS="${MIN_OS:-14.0}"
+info "最低系統版本：macOS $MIN_OS（Apple Silicon）"
+
+# 乾淨環境實際 import 全部模組（模擬沒有 Homebrew/開發環境的機器）
+env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$BPY" -B -E -s -c "
+import sys, os
+sys.path.insert(0, '$APP_RES')
+assert sys.prefix.startswith('$PYROOT'), sys.prefix
+import server, scanner, stability, lan_scanner, traffic_monitor, net_diag, iperf3_mgr
+import reporter, recommender, recommendations, analyzer, ai_advisor, heatmap_gen
+import speedtest_cf, config, main, webview, numpy, PIL, reportlab, dns.resolver, CoreWLAN
+heatmap_gen.add_measurement(0.2,0.2,-50,30,'',80,[]); heatmap_gen.add_measurement(0.8,0.7,-75,10,'',30,[])
+assert heatmap_gen.generate_heatmap(400,300,True,'rssi',False), 'heatmap 失敗'
+assert reporter.generate_diagnosis_pdf({}, {})[:5] == b'%PDF-', 'PDF 失敗'
+bad = [m for m in ('scipy','mac_vendor_lookup','aiohttp') if m in sys.modules]
+assert not bad, f'不應載入：{bad}'
+print('  smoke test OK — Python', sys.version.split()[0])
+" || error "bundle 自我測試失敗"
+
+# ── 9. Info.plist ───────────────────────────────────────────────────────────
+info "Writing Info.plist…"
 cat > "$CONTENTS/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -130,47 +179,38 @@ cat > "$CONTENTS/Info.plist" << PLIST
   <key>CFBundlePackageType</key>       <string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key>           <string>${VERSION}</string>
-  <key>LSMinimumSystemVersion</key>    <string>12.0</string>
+  <key>LSMinimumSystemVersion</key>    <string>${MIN_OS}</string>
+  <key>LSArchitecturePriority</key>    <array><string>arm64</string></array>
   <key>NSHighResolutionCapable</key>   <true/>
   <key>NSRequiresAquaSystemAppearance</key><false/>
   <key>NSLocationWhenInUseUsageDescription</key>
-    <string>NetInspect Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。</string>
+    <string>NetInspect Pro 需要定位服務以顯示 Wi-Fi 的 SSID 和 BSSID 資訊。</string>
   <key>NSLocationAlwaysUsageDescription</key>
-    <string>NetInspect Pro 需要定位服務以顯示 SSID 和 BSSID 資訊。</string>
+    <string>NetInspect Pro 需要定位服務以顯示 Wi-Fi 的 SSID 和 BSSID 資訊。</string>
 </dict>
 </plist>
 PLIST
 
-# ── 7. Ad-hoc code sign (removes Gatekeeper block on same machine) ───────────
+# ── 10. Ad-hoc code sign（失敗要看得到，不再吞掉錯誤）─────────────────────────
 info "Code signing (ad-hoc)…"
-codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null \
-  && info "Signed ✓" \
-  || warn "codesign failed — first launch may need right-click > Open"
+codesign --force --deep --sign - "$APP_BUNDLE"
+codesign --verify --deep --strict "$APP_BUNDLE" && info "Signed ✓"
 
-# ── 8. Create DMG ────────────────────────────────────────────────────────────
+# ── 11. Create DMG（lzma 壓縮，macOS 10.15+ 皆可開）───────────────────────────
 info "Creating DMG…"
-
 STAGING=$(mktemp -d)
-trap "rm -rf $STAGING /tmp/wifi_rw.dmg" EXIT
+RW_DMG="$(mktemp -d)/rw.dmg"
+trap 'rm -rf "$STAGING" "$(dirname "$RW_DMG")"' EXIT
 
-cp -r "$APP_BUNDLE" "$STAGING/"
+cp -R "$APP_BUNDLE" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
-
 APP_MB=$(du -sm "$APP_BUNDLE" | cut -f1)
-DMG_MB=$(( APP_MB + 30 ))
 
-hdiutil create \
-    -srcfolder  "$STAGING" \
-    -volname    "$APP_NAME" \
-    -fs         HFS+ \
-    -format     UDRW \
-    -size       "${DMG_MB}m" \
-    /tmp/wifi_rw.dmg \
-    > /dev/null
+hdiutil create -srcfolder "$STAGING" -volname "$APP_NAME" -fs HFS+ \
+    -format UDRW -size "$(( APP_MB + 30 ))m" "$RW_DMG" > /dev/null
 
-# Optional: set Finder window layout
 MOUNT_PT=$(mktemp -d)
-hdiutil attach /tmp/wifi_rw.dmg -mountpoint "$MOUNT_PT" -nobrowse -quiet
+hdiutil attach "$RW_DMG" -mountpoint "$MOUNT_PT" -nobrowse -quiet
 osascript - "$APP_NAME" "$MOUNT_PT" <<'AS' 2>/dev/null || true
 on run {vol, mp}
   tell application "Finder"
@@ -190,27 +230,20 @@ end run
 AS
 hdiutil detach "$MOUNT_PT" -quiet
 rm -rf "$MOUNT_PT"
+hdiutil convert "$RW_DMG" -format ULMO -o "$DMG_OUT" > /dev/null
 
-hdiutil convert /tmp/wifi_rw.dmg \
-    -format UDZO -imagekey zlib-level=9 \
-    -o "$DMG_OUT" > /dev/null
-
-# ── 9. Done ──────────────────────────────────────────────────────────────────
+# ── 12. Done ────────────────────────────────────────────────────────────────
 DMG_SZ=$(du -sh "$DMG_OUT" | cut -f1)
 APP_SZ=$(du -sh "$APP_BUNDLE" | cut -f1)
-
 echo ""
 echo -e "${GRN}═══════════════════════════════════════════════════════${NC}"
-echo -e "${GRN}  ✓ Build complete!${NC}"
+echo -e "${GRN}  ✓ Build complete!  v${VERSION}  (Python ${PY_FULL}, macOS ${MIN_OS}+, Apple Silicon)${NC}"
 echo -e "${GRN}  App : $APP_BUNDLE  (${APP_SZ})${NC}"
 echo -e "${GRN}  DMG : $DMG_OUT  (${DMG_SZ})${NC}"
 echo -e "${GRN}═══════════════════════════════════════════════════════${NC}"
 echo ""
 echo "安裝方式："
-echo "  1. 打開 DMG 檔"
-echo "  2. 將「${APP_NAME}」拖到 Applications 資料夾"
-echo "  3. 首次開啟請右鍵 > 開啟（Gatekeeper 繞過）"
-echo "     或執行：xattr -d com.apple.quarantine \"/Applications/${APP_NAME}.app\""
+echo "  1. 打開 DMG，將「${APP_NAME}」拖到 Applications"
+echo "  2. 首次開啟若被 macOS 擋下：系統設定 › 隱私權與安全性 › 往下捲 › 「仍要打開」"
+echo "     （或在終端機執行：xattr -dr com.apple.quarantine \"/Applications/${APP_NAME}.app\"）"
 echo ""
-
-open "$DIST_DIR" 2>/dev/null || true
