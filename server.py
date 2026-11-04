@@ -27,6 +27,7 @@ import iperf3_mgr
 import stability
 import speedtest_cf
 import ai_advisor
+import location_auth
 
 # When frozen by PyInstaller, resources live in sys._MEIPASS
 _BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -124,13 +125,31 @@ def api_set_interface():
 def api_scan():
     nets = scanner.scan_networks()
     hidden = sum(1 for n in nets if n.get("ssid") in ("<Hidden>", "<需定位授權>"))
+    # BSSID 被遮蔽＝缺定位授權（真正的隱藏網路仍有 BSSID，不能只看 SSID）
+    redacted = sum(1 for n in nets if str(n.get("bssid", "")).startswith("<"))
     return jsonify({
         "ok": True,
         "networks": nets,
         "count": len(nets),
-        "needs_location": hidden > 0,
+        "needs_location": redacted > 0,
         "hidden_count": hidden,
     })
+
+
+# ─── 定位服務授權（macOS 沒授權就遮蔽 SSID / BSSID）────────────────────────────
+@app.route("/api/location/status")
+def api_location_status():
+    return jsonify(location_auth.status())
+
+
+@app.route("/api/location/request", methods=["POST"])
+def api_location_request():
+    return jsonify(location_auth.request())
+
+
+@app.route("/api/location/open-settings", methods=["POST"])
+def api_location_open_settings():
+    return jsonify(location_auth.open_settings())
 
 
 @app.route("/api/current")

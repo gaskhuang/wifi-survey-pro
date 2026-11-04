@@ -112,12 +112,33 @@ def _boot(window, port, url):
     if _wait_for_server(port):
         print(f"NetInspect Pro running at {url}")
         window.load_url(url)
+        try:                                  # 第一次開啟 → 跳定位授權（沒授權看不到 SSID/BSSID）
+            import location_auth
+            location_auth.request_if_needed()
+        except Exception as e:
+            print(f"[WARN] location auth: {e}", file=sys.stderr)
     else:
         print(f"[ERROR] Server failed to start on port {port}", file=sys.stderr)
         window.load_html(_ERROR_HTML.replace("{log}", _log_path()))
 
 
+def _selftest():
+    """打包驗證用：確認原生啟動程式內嵌的 Python 與 App 身分正確（讀得到定位用途說明）。"""
+    import json
+    from Foundation import NSBundle
+    import location_auth, server  # noqa: F401  確認後端可載入
+    b = NSBundle.mainBundle()
+    print(json.dumps({
+        "prefix": sys.prefix, "executable": sys.executable,
+        "bundle": str(b.bundlePath()), "bundle_id": str(b.bundleIdentifier() or ""),
+        "location": location_auth.status(),
+    }, ensure_ascii=False))
+
+
 def main():
+    if "--selftest" in sys.argv[1:]:
+        _selftest()
+        return
     _setup_logging()
     _raise_fd_limit()
 

@@ -6,6 +6,7 @@
 # ── Wi-Fi 掃描（CoreWLAN）+ 原生視窗（pywebview / WebKit）────────────────
 pyobjc-core==12.2
 pyobjc-framework-Cocoa==12.2
+pyobjc-framework-CoreLocation==12.2
 pyobjc-framework-CoreWLAN==12.2
 pyobjc-framework-Quartz==12.2
 pyobjc-framework-Security==12.2

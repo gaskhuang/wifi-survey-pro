@@ -368,15 +368,20 @@ def get_interfaces() -> list[dict]:
         return [{"name": "en0", "active": True, "default": True}]
 
 
-def set_interface(name: str) -> bool:
-    """Select which Wi-Fi interface to use for scanning."""
-    global _selected_iface, _conn_cache
-    _selected_iface = name
-    # 換介面 → 作廢快取，避免回傳舊介面的結果
+def invalidate_cache():
+    """作廢連線/掃描快取（換介面、定位授權狀態改變時呼叫）。"""
+    global _conn_cache
     with _conn_lock:
         _conn_cache = (0.0, None)
     with _scan_state_lock:
         _scan_cache["nets"] = None
+
+
+def set_interface(name: str) -> bool:
+    """Select which Wi-Fi interface to use for scanning."""
+    global _selected_iface
+    _selected_iface = name
+    invalidate_cache()      # 換介面 → 避免回傳舊介面的結果
     return True
 
 

@@ -16,7 +16,7 @@ set -euo pipefail
 
 APP_NAME="NetInspect Pro"
 BUNDLE_ID="tw.zonetech.netinspect-pro"
-VERSION="3.1.0"
+VERSION="3.1.1"
 
 # ── 可攜式 Python（版本與 SHA256 鎖定；升級時三個值一起改）──────────────────
 PBS_TAG="20261026"
@@ -39,7 +39,7 @@ error() { echo -e "${RED}✗  $*${NC}"; exit 1; }
 # ── 0. Checks ───────────────────────────────────────────────────────────────
 [[ "$(uname)" == "Darwin" ]] || error "Must run on macOS"
 [[ "$(uname -m)" == "arm64" ]] || error "需在 Apple Silicon 上建置（產物為 arm64）"
-for c in curl shasum tar codesign hdiutil otool vtool; do
+for c in curl shasum tar codesign hdiutil otool vtool clang; do
     command -v "$c" >/dev/null || error "缺少指令：$c"
 done
 
@@ -70,6 +70,16 @@ tar -xzf "$CACHE_DIR/$PBS_FILE" -C "$TMPX"
 mv "$TMPX/python" "$PYROOT"
 rm -rf "$TMPX"
 "$BPY" -c "import sys; assert sys.version_info[:2] == (3, 13)" || error "內嵌 Python 無法執行"
+
+# ── 2b. 原生啟動程式：在同一程序內嵌 Python，主執行檔才是 App 本身 ─────────────────
+#  （shell 腳本 exec python 會讓 macOS 認不得 App 身分 → 定位授權視窗不會出現，SSID/BSSID 被遮蔽）
+#  要在瘦身刪掉 include/ 之前編譯
+info "Compiling native launcher…"
+LAUNCHER="$MACOS/${APP_NAME}"
+clang -O2 -arch arm64 -mmacosx-version-min=14.0 -Wall -Werror \
+    -I"$PYROOT/include/python3.13" "$SRC_DIR/launcher/launcher.c" \
+    -L"$PYROOT/lib" -lpython3.13 -Wl,-rpath,@executable_path/../Resources/python/lib \
+    -o "$LAUNCHER" || error "啟動程式編譯失敗（需要 Xcode Command Line Tools：xcode-select --install）"
 
 # ── 3. 原始碼 + 前端 + 資料 ──────────────────────────────────────────────────
 # 一律帶上全部 .py（舊版手寫清單曾漏掉模組，導致打包後一開就崩）；setup.py 只供開發用
@@ -108,20 +118,7 @@ find "$RESOURCES" -type d -name __pycache__ -prune -exec rm -rf {} +
 info "Precompiling bytecode…"
 "$BPY" -m compileall -q -j 0 "$APP_RES" "$STD" >/dev/null || warn "部分檔案編譯失敗（不影響執行）"
 
-# ── 7. Launcher ─────────────────────────────────────────────────────────────
-info "Writing launcher…"
-LAUNCHER="$MACOS/${APP_NAME}"
-cat > "$LAUNCHER" << 'BASH'
-#!/bin/bash
-# NetInspect Pro 啟動器：使用 bundle 內嵌的 Python。
-#  -B 不寫 .pyc（bundle 唯讀且已預編譯，寫入會破壞簽章）
-#  -E 忽略使用者的 PYTHON* 環境變數（避免 PYTHONHOME/PYTHONPATH 干擾）
-#  -s 不載入使用者 site-packages
-RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
-exec "$RES/python/bin/python3" -B -E -s "$RES/app/main.py"
-BASH
-chmod +x "$LAUNCHER"
-
+# ── 7. App 圖示（啟動程式已在 2b 編譯）────────────────────────────────────────
 if [[ -f "$SRC_DIR/AppIcon.icns" ]]; then
     cp "$SRC_DIR/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 fi
@@ -155,6 +152,7 @@ assert sys.prefix.startswith('$PYROOT'), sys.prefix
 import server, scanner, stability, lan_scanner, traffic_monitor, net_diag, iperf3_mgr
 import reporter, recommender, recommendations, analyzer, ai_advisor, heatmap_gen
 import speedtest_cf, config, main, webview, numpy, PIL, reportlab, dns.resolver, CoreWLAN
+import location_auth, CoreLocation
 heatmap_gen.add_measurement(0.2,0.2,-50,30,'',80,[]); heatmap_gen.add_measurement(0.8,0.7,-75,10,'',30,[])
 assert heatmap_gen.generate_heatmap(400,300,True,'rssi',False), 'heatmap 失敗'
 assert reporter.generate_diagnosis_pdf({}, {})[:5] == b'%PDF-', 'PDF 失敗'
@@ -195,6 +193,20 @@ PLIST
 info "Code signing (ad-hoc)…"
 codesign --force --deep --sign - "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE" && info "Signed ✓"
+
+# 實際透過原生啟動程式跑一次：確認內嵌 Python 正確、App 身分讀得到定位用途說明
+info "Launcher self-test…"
+SELF=$(env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$LAUNCHER" --selftest) \
+    || error "原生啟動程式無法執行"
+echo "  $SELF"
+echo "$SELF" | "$BPY" -B -E -s -c "
+import json, sys
+d = json.load(sys.stdin)
+assert d['bundle'].endswith('.app'), 'mainBundle 不是 .app：' + d['bundle']
+assert d['prefix'].endswith('/Contents/Resources/python'), 'prefix 錯誤：' + d['prefix']
+assert d['location'].get('app_bundle'), 'Info.plist 的定位用途說明讀不到'
+" || error "啟動程式自我測試失敗"
+codesign --verify --deep --strict "$APP_BUNDLE" || error "自我測試後簽章失效（有檔案被寫入 bundle）"
 
 # ── 11. Create DMG（lzma 壓縮，macOS 10.15+ 皆可開）───────────────────────────
 info "Creating DMG…"

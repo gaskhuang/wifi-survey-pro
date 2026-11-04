@@ -75,8 +75,9 @@ async function doScan() {
     rerender();
 
     let msg = `Scan complete — ${d.count} networks found`;
-    if (d.needs_location) msg += " · Enable Location Services to see SSIDs";
+    if (d.needs_location) msg += " · 網路名稱與 BSSID 被系統遮蔽（需定位授權）";
     showStatus(status, msg, d.needs_location);
+    if (window.LocationGate) LocationGate.refresh();
     updateReportCounts();
 
     // 掃描完成 → 自動產生鄰居環境優化建議方案

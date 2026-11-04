@@ -215,7 +215,7 @@
       </a>
       <a class="btn btn-ghost" href="https://github.com/gaskhuang/wifi-survey-pro" target="_blank" rel="noopener">在 GitHub 查看原始碼</a>
     </div>
-    <div class="note">v3.1.0 · Apple Silicon（M1 以後）· macOS 14 以上 · 下載 32 MB，內含完整執行環境，免裝 Python</div>
+    <div class="note">v3.1.1 · Apple Silicon（M1 以後）· macOS 14 以上 · 下載 32 MB，內含完整執行環境，免裝 Python</div>
 
     <!-- app mockup -->
     <div class="shot">
@@ -387,7 +387,7 @@
           <li><b>晶片</b>Apple Silicon（M1、M2、M3、M4 以後）<br>不支援 Intel 處理器的 Mac</li>
           <li><b>作業系統</b>macOS 14 Sonoma 以上</li>
           <li><b>空間</b>下載 32 MB，安裝後約 130 MB</li>
-          <li><b>權限</b>定位服務（macOS 需要它才會提供 Wi-Fi 名稱 SSID）</li>
+          <li><b>權限</b>定位服務（macOS 需要它才會提供 Wi-Fi 名稱與 BSSID；第一次開啟會跳出授權視窗）</li>
         </ul>
       </div>
       <div class="req">
@@ -403,12 +403,13 @@
         <ol>
           <li>打開 DMG，把 NetInspect Pro 拖到「應用程式」</li>
           <li>若 macOS 顯示無法打開：到 <b>系統設定 › 隱私權與安全性</b>，往下捲找到 NetInspect Pro，按「<b>仍要打開</b>」</li>
+          <li>跳出「允許 NetInspect Pro 使用你的位置」時按<b>允許</b>，才看得到 Wi-Fi 名稱與 BSSID（之後可到 系統設定 › 隱私權與安全性 › 定位服務 更改）</li>
           <li>之後就能直接從啟動台開啟</li>
         </ol>
       </div>
     </div>
     <div class="specs">
-      <div class="spec"><b>版本</b> v3.1.0</div>
+      <div class="spec"><b>版本</b> v3.1.1</div>
       <div class="spec"><b>頻段</b> 2.4 / 5 / 6 GHz</div>
       <div class="spec"><b>執行環境</b> 內含 Python 3.13</div>
       <div class="spec"><b>介面</b> macOS 原生視窗</div>
