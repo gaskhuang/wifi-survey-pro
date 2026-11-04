@@ -144,7 +144,7 @@ MIN_OS=$(find "$APP_BUNDLE" -type f \( -name "*.so" -o -name "*.dylib" -o -perm 
          | while read -r bin; do vtool -show-build "$bin" 2>/dev/null | awk '/minos/{print $2}' || true; done \
          | sort -t. -k1,1n -k2,2n | tail -1) || true
 MIN_OS="${MIN_OS:-14.0}"
-info "最低系統版本：macOS $MIN_OS（Apple Silicon）"
+info "最低系統版本：macOS ${MIN_OS}（Apple Silicon）"
 
 # 乾淨環境實際 import 全部模組（模擬沒有 Homebrew/開發環境的機器）
 env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
