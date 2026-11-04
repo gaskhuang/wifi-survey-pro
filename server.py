@@ -1147,7 +1147,7 @@ def api_info():
     import platform, sys
     return jsonify({
         "app":      "NetInspect Pro",
-        "version":  "2.1.0",
+        "version":  "3.1.2",
         "python":   sys.version.split()[0],
         "platform": platform.platform(),
         "corewlan": _check_corewlan(),
