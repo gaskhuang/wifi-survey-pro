@@ -200,7 +200,7 @@ function drawDotOnCanvas(xPct, yPct, rssi, id) {
   ctx.strokeStyle = "#fff";
   ctx.lineWidth   = 1.5;
   ctx.fill(); ctx.stroke();
-  ctx.fillStyle = "#fff"; ctx.font = "bold 9.5px -apple-system"; ctx.textAlign = "center";
+  ctx.fillStyle = "#fff"; ctx.font = `bold ${fs(9.5)}px -apple-system`; ctx.textAlign = "center";
   ctx.fillText(`${rssi}`, px, py + 3);
 }
 
@@ -213,7 +213,7 @@ function addMeasurementRow(pt) {
   div.innerHTML = `
     <span class="mi-id">#${escHtml(pt.id+1)}</span>
     <span class="mi-rssi" style="color:${escHtml(pt.color||rssiToColor(pt.rssi))}">${escHtml(pt.rssi)}dBm${escHtml(sc)}</span>
-    <span style="color:var(--text-3);font-size:11px">${escHtml(pt.label)}</span>
+    <span style="color:var(--text-3);font-size: calc(11px * var(--fs, 1))">${escHtml(pt.label)}</span>
     <span class="mi-del" onclick="delPoint(${Number(pt.id)})">✕</span>`;
   list.appendChild(div);
 }

@@ -3,9 +3,10 @@ ai_advisor.py — AI 建議行動引擎
 把一鍵診斷的所有量測結果整理成精簡 JSON，交給 AI 分析，
 輸出「給經驗不足的 IT 工程師」看得懂、可立即執行的三級行動清單。
 
-Provider 鏈（自動降級）：
-  1. Codex CLI（OpenAI OAuth，`codex exec` headless + --output-schema 強制 JSON）
-  2. 離線規則引擎（recommender.py 的 full_assessment 映射成相同格式）
+使用設定頁選擇的引擎（config.ai.provider），失敗時降級為離線規則引擎：
+  · openai / gemini / deepseek / claude：用使用者填的 API 金鑰呼叫（ai_providers）
+  · codex：本機已登入的 Codex CLI（`codex exec` headless + --output-schema 強制 JSON）
+  · offline：離線規則引擎（recommender.py 的 full_assessment 映射成相同格式）
 
 優先級：immediate（🔴 立即處理）/ adjust（🟡 建議調整）/ ok（🟢 狀態正常）
 """
@@ -16,6 +17,8 @@ import signal
 import subprocess
 import tempfile
 
+import ai_providers
+import config
 import recommender
 
 CODEX_TIMEOUT = 180
@@ -248,6 +251,66 @@ def _codex_analyze(payload: dict) -> dict | None:
         return None
 
 
+def _extract_json(text: str):
+    """從模型回覆取出 JSON（容忍 ```json 區塊或前後多餘文字）。"""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[-1].rsplit("```", 1)[0]
+    a, b = t.find("{"), t.rfind("}")
+    if a < 0 or b <= a:
+        return None
+    try:
+        return json.loads(t[a:b + 1])
+    except ValueError:
+        return None
+
+
+def _api_analyze(provider: str, payload: dict) -> dict | None:
+    """用設定頁選的雲端模型分析；回覆不是合法 JSON 就交給規則引擎。"""
+    try:
+        system = ("你是資深 Wi-Fi 無線網路顧問。只輸出一個 JSON 物件，不要任何其他文字或 Markdown，"
+                  "格式必須符合這個 JSON Schema：\n" + json.dumps(_SCHEMA, ensure_ascii=False))
+        text = ai_providers.call_provider(provider, system,
+                                          _PROMPT + json.dumps(payload, ensure_ascii=False, indent=1))
+        return _validate(_extract_json(text))
+    except Exception:
+        return None
+
+
+def current_engine() -> str:
+    """實際會用的引擎：選了雲端模型但沒金鑰、選了 Codex 但沒安裝 → 退回 rules。"""
+    ai = config.load()["ai"]
+    p = ai.get("provider", "offline")
+    if p in ai_providers.KEYED and (ai.get("keys") or {}).get(p):
+        return p
+    if p == "codex" and codex_available():
+        return "codex"
+    return "rules"
+
+
+def engine_label(engine: str | None = None) -> str:
+    engine = engine or current_engine()
+    if engine == "rules":
+        return "離線規則引擎"
+    if engine in ai_providers.KEYED:
+        return f"{ai_providers.PROVIDER_NAMES[engine]}・{ai_providers.model_for(engine)}"
+    return ai_providers.PROVIDER_NAMES.get(engine, engine)
+
+
+def codex_text(prompt: str, timeout: float = CODEX_TIMEOUT) -> str:
+    """Codex CLI 純文字回覆（AI 診斷的深入分析用）。"""
+    codex = shutil.which("codex")
+    if not codex:
+        raise RuntimeError("找不到 Codex CLI")
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, "out.txt")
+        if not _run_codex([codex, "exec", "--sandbox", "read-only", "--skip-git-repo-check",
+                           "-C", tmp, "--output-last-message", out_path, "-"], prompt, timeout):
+            raise RuntimeError("Codex 逾時")
+        with open(out_path, encoding="utf-8") as f:
+            return f.read()
+
+
 # ── Provider 2: 離線規則引擎（recommender 映射）──────────────────────────────
 _SEV_TO_PRIORITY = {"critical": "immediate", "warning": "adjust",
                     "info": "adjust", "good": "ok"}
@@ -281,8 +344,12 @@ def analyze(networks: list, analysis: dict, current: dict, netperf: dict,
     payload = build_payload(networks, analysis, current, netperf,
                             speedtest, stability_result)
 
-    result = _codex_analyze(payload)
-    provider = "codex"
+    provider = current_engine()
+    result = None
+    if provider == "codex":
+        result = _codex_analyze(payload)
+    elif provider in ai_providers.KEYED:
+        result = _api_analyze(provider, payload)
     if result is None:
         try:
             result = _rules_analyze(networks, analysis, current, netperf)
@@ -295,4 +362,4 @@ def analyze(networks: list, analysis: dict, current: dict, netperf: dict,
     order = {"immediate": 0, "adjust": 1, "ok": 2}
     result["items"].sort(key=lambda i: order.get(i.get("priority"), 9)
                          if isinstance(i, dict) else 9)
-    return {"ok": True, "provider": provider, **result}
+    return {"ok": True, "provider": provider, "provider_label": engine_label(provider), **result}

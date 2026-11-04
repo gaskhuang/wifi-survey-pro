@@ -137,17 +137,17 @@ function renderNetTable(nets) {
     const sigColor = _signalColor(pct);
     const ssidHtml = _ssidCell(n);
     const vendorHtml = n.vendor
-      ? `<span style="font-size:12px">${escHtml(n.vendor)}</span>`
-      : `<span style="color:var(--text-3);font-size:12px">—</span>`;
+      ? `<span style="font-size: calc(12px * var(--fs, 1))">${escHtml(n.vendor)}</span>`
+      : `<span style="color:var(--text-3);font-size: calc(12px * var(--fs, 1))">—</span>`;
     const maxRate = n.max_rate != null
       ? `<span style="color:var(--text-2)">${escHtml(n.max_rate)} Mbps</span>`
       : "—";
     const gen = n.gen >= 4
       ? `<span class="gen-badge" style="color:${_genColor(n.gen)}">${escHtml(n.gen)}</span>`
       : "—";
-    const secHtml = `<span style="font-size:12px;color:var(--text-2)">${escHtml(n.security||"")}</span>`;
-    const seenHtml = `<span style="font-size:12px">${escHtml(n.seen_ago||"—")}</span>`;
-    const bssidDisp = String(n.bssid ?? "").startsWith("<") ? `<span style="color:var(--text-3);font-size:11px">${escHtml(n.bssid)}</span>` : escHtml(n.bssid);
+    const secHtml = `<span style="font-size: calc(12px * var(--fs, 1));color:var(--text-2)">${escHtml(n.security||"")}</span>`;
+    const seenHtml = `<span style="font-size: calc(12px * var(--fs, 1))">${escHtml(n.seen_ago||"—")}</span>`;
+    const bssidDisp = String(n.bssid ?? "").startsWith("<") ? `<span style="color:var(--text-3);font-size: calc(11px * var(--fs, 1))">${escHtml(n.bssid)}</span>` : escHtml(n.bssid);
 
     return `<tr class="net-row${isConn?" connected":""}" data-bssid="${escHtml(n.bssid)}" data-idx="${n._idx}">
       <td class="col-bar-cell"><div class="col-bar-inner" style="background:${escHtml(n.net_color)}"></div></td>
@@ -163,7 +163,7 @@ function renderNetTable(nets) {
       <td style="text-align:center;font-weight:600">${escHtml(n.channel)}</td>
       <td style="color:var(--text-2)">${escHtml(n.width)} MHz</td>
       <td style="color:var(--text-2)">${escHtml(n.band)}</td>
-      <td style="font-family:monospace;font-size:12px;color:var(--text-2)">${escHtml(n.mode||"")}</td>
+      <td style="font-family:monospace;font-size: calc(12px * var(--fs, 1));color:var(--text-2)">${escHtml(n.mode||"")}</td>
       <td style="text-align:center">${gen}</td>
       <td>${secHtml}</td>
       <td style="text-align:right">${maxRate}</td>

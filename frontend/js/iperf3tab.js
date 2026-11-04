@@ -337,16 +337,16 @@ function _initLiveChart(mode) {
     options: {
       responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
       scales: {
-        x: { grid: { color:"rgba(255,255,255,.04)" }, ticks: { color:"#64748b", font:{ size:11 } } },
+        x: { grid: { color:"rgba(255,255,255,.04)" }, ticks: { color:"#64748b", font:{ size:fs(11) } } },
         y: {
           min: 0,
           grid: { color:"rgba(255,255,255,.05)" },
-          ticks: { color:"#64748b", font:{ size:11 } },
-          title: { display:true, text:"Mbps", color:"#64748b", font:{ size:11 } },
+          ticks: { color:"#64748b", font:{ size:fs(11) } },
+          title: { display:true, text:"Mbps", color:"#64748b", font:{ size:fs(11) } },
         }
       },
       plugins: {
-        legend: { labels: { color:"#94a3b8", font:{ size:11 }, boxWidth:10 } },
+        legend: { labels: { color:"#94a3b8", font:{ size:fs(11) }, boxWidth:10 } },
         tooltip: { callbacks: { label: c => ` ${c.parsed.y.toFixed(1)} Mbps` } }
       }
     }
@@ -439,7 +439,7 @@ function _renderAnalysis(data) {
   // ── Use cases ──────────────────────────────────────────────────────────────
   const uses = data.use_cases || [];
   document.getElementById("ip3-usecases").innerHTML = uses.length
-    ? `<div style="font-size:12px;color:var(--text-3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px">適合用途</div>` +
+    ? `<div style="font-size: calc(12px * var(--fs, 1));color:var(--text-3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px">適合用途</div>` +
       uses.map(u => `<span class="ip3-usecase-chip">${escHtml(u)}</span>`).join("")
     : "";
 

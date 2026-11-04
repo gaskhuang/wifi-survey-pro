@@ -5,10 +5,10 @@ config.py — 使用者設定儲存（NetInspect Pro）
   macOS  : ~/Library/Application Support/NetInspectPro/config.json
   其他   : ~/.config/netinspectpro/config.json
 
-主要保存 AI 引擎設定：
-  · provider：offline（離線規則）/ openai / gemini / deepseek / claude / cloud（雲端代理）
-  · keys：各家 BYOK 金鑰（存使用者本機；不寫入任何診斷 log）
-  · cloud：進階付費雲端分析主機端點與授權 token（雲端樁，之後接）
+主要保存：
+  · ai.provider：offline（離線規則）/ codex / openai / gemini / deepseek / claude
+  · ai.models：各供應商選用的模型；ai.keys：各家 API 金鑰（存使用者本機；不寫入任何診斷 log）
+  · ui.font_scale：介面字型大小倍率
 
 安全：診斷資料與 AI 請求/回應「不落地明文 log」；金鑰僅存本設定檔，
       回傳給前端時一律遮蔽（masked），避免外洩。
@@ -25,15 +25,17 @@ _CACHE = {"key": None, "data": None}   # 依 (mtime_ns, size) 快取解析結果
 
 _DEFAULT = {
     "ai": {
-        "provider": "offline",                # offline|openai|gemini|deepseek|claude|cloud
+        "provider": "offline",                # offline|codex|openai|gemini|deepseek|claude
         "keys": {"openai": "", "gemini": "", "deepseek": "", "claude": ""},
-        "models": {
-            "openai": "gpt-4o-mini",
-            "gemini": "gemini-1.5-flash",
-            "deepseek": "deepseek-chat",
-            "claude": "claude-sonnet-5",
+        "models": {                           # 與 ai_providers.DEFAULT_MODEL 一致
+            "openai": "gpt-6-astra",
+            "gemini": "gemini-3.8-flash",
+            "deepseek": "deepseek-flash",
+            "claude": "claude-opus-5-5",
         },
-        "cloud": {"endpoint": "", "token": ""},  # 進階付費雲端分析（樁）
+    },
+    "ui": {
+        "font_scale": 1.0,                    # 介面字型大小倍率（0.8 ～ 1.5）
     },
     "privacy": {
         "plaintext_logs": False,              # 地端不留明文診斷 log
@@ -71,6 +73,31 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
+_PROVIDERS = ("offline", "codex", "openai", "gemini", "deepseek", "claude")
+FONT_SCALES = (0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5)
+
+
+def _migrate(c: dict) -> dict:
+    """舊版設定升級：拿掉已移除的「進階雲端分析」、已停用的舊預設模型換成新預設、字級夾在範圍內。"""
+    ai = c["ai"]
+    ai.pop("cloud", None)
+    if ai.get("provider") not in _PROVIDERS:
+        ai["provider"] = "offline"
+    try:
+        import ai_providers
+        for p, old in ai_providers.LEGACY_MODELS.items():
+            if not ai["models"].get(p) or ai["models"][p] in old:
+                ai["models"][p] = ai_providers.DEFAULT_MODEL[p]
+    except Exception:
+        pass
+    try:
+        fs = float(c["ui"].get("font_scale", 1.0))
+    except (TypeError, ValueError):
+        fs = 1.0
+    c["ui"]["font_scale"] = min(FONT_SCALES, key=lambda x: abs(x - fs))
+    return c
+
+
 def _backup_corrupt(path: str):
     """設定檔損毀時另存備份，避免之後的 save() 把唯一的資料蓋掉。"""
     try:
@@ -102,7 +129,7 @@ def load() -> dict:
             _backup_corrupt(path)
             _CACHE["key"], _CACHE["data"] = None, None
             return copy.deepcopy(_DEFAULT)
-        merged = _deep_merge(_DEFAULT, data)
+        merged = _migrate(_deep_merge(_DEFAULT, data))
         _CACHE["key"], _CACHE["data"] = key, merged
         return copy.deepcopy(merged)
 
@@ -113,7 +140,7 @@ def save(patch: dict) -> dict:
     （直接 open(path,"w") 會先清空檔案，斷電/崩潰就可能留下半個檔、金鑰全失）。
     寫檔失敗會拋出例外（由呼叫端處理）。"""
     with _LOCK:
-        merged = _deep_merge(load(), patch or {})
+        merged = _migrate(_deep_merge(load(), patch or {}))
         path = _config_path()
         tmp = path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # 含 API 金鑰，僅本人可讀
@@ -164,9 +191,8 @@ def public_view() -> dict:
             "models": ai["models"],
             "keys_set": {k: bool(v) for k, v in ai["keys"].items()},
             "keys_masked": {k: _mask(v) for k, v in ai["keys"].items()},
-            "cloud": {"endpoint": ai["cloud"]["endpoint"],
-                      "token_set": bool(ai["cloud"]["token"])},
         },
+        "ui": c["ui"],
         "privacy": c["privacy"],
         "branding": {"company": c["branding"]["company"],
                      "contact": c["branding"]["contact"],

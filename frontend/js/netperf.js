@@ -86,16 +86,16 @@ function updateNpChart() {
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       scales: {
-        x: { grid: { color: "rgba(255,255,255,.04)" }, ticks: { color: "#64748b", font: { size: 11 } } },
+        x: { grid: { color: "rgba(255,255,255,.04)" }, ticks: { color: "#64748b", font: { size: fs(11) } } },
         y: {
           min: 0,
           grid: { color: "rgba(255,255,255,.05)" },
-          ticks: { color: "#64748b", font: { size: 11 } },
-          title: { display: true, text: "ms", color: "#64748b", font: { size: 11 } },
+          ticks: { color: "#64748b", font: { size: fs(11) } },
+          title: { display: true, text: "ms", color: "#64748b", font: { size: fs(11) } },
         }
       },
       plugins: {
-        legend: { labels: { color: "#94a3b8", font: { size: 12 }, boxWidth: 10 } },
+        legend: { labels: { color: "#94a3b8", font: { size: fs(12) }, boxWidth: 10 } },
         annotation: {}
       }
     }

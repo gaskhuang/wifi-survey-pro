@@ -303,7 +303,7 @@ const FeatureReport = (() => {
         if (steps.length && $("dg2-steps")?.style.display !== "none") secs.push({ type: "steps", title: "檢測步驟", items: steps });
         secs.push({ type: "assessment", title: r.title, assessment: r.assessment });
         const ai = $("dg2-ai-out")?.style.display !== "none" ? $("dg2-ai-text")?.textContent : "";
-        if (ai) secs.push({ type: "text", title: `進階 AI 分析${txt($("dg2-ai-provider"))}`, paragraphs: ai.split(/\n{2,}/) });
+        if (ai) secs.push({ type: "text", title: `AI 深入分析${txt($("dg2-ai-provider"))}`, paragraphs: ai.split(/\n{2,}/) });
         return secs;
       },
     },
@@ -355,7 +355,7 @@ const FeatureReport = (() => {
       else {                                       // 掃描頁沒有 tab-header，放在掃描按鈕前
         const scanBtn = $("btn-scan");
         if (!scanBtn) continue;
-        b.style.cssText = "font-size:12px;padding:4px 10px";
+        b.style.cssText = "font-size: calc(12px * var(--fs, 1));padding:4px 10px";
         scanBtn.parentNode.insertBefore(b, scanBtn);
       }
       buttons[tab] = b;

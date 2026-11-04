@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    diag.js — AI 診斷分頁
    一鍵情境診斷（OSI/DNS/DHCP/NAT/全項）+ 子網計算機。
-   離線規則引擎判讀；設定 AI 供應商後可勾「進階 AI 分析」。
+   離線規則引擎判讀；在設定頁選了大語言模型後，會再交給該模型做深入分析。
    ═══════════════════════════════════════════════════════════════════════════ */
 (() => {
   const $ = id => document.getElementById(id);
@@ -15,11 +15,12 @@
     if (_loaded) return;
     try {
       const d = await (await fetch("/api/diag/info")).json();
-      const offline = d.ai_provider === "offline";
+      const offline = d.ai_provider === "rules";
       $("dg2-ai-wrap").style.display = offline ? "none" : "inline-flex";
+      if (!offline && !_loaded) $("dg2-ai").checked = true;   // 選了模型就預設使用
       $("dg2-provider").textContent = offline
-        ? "AI 引擎：離線規則（可到「設定」啟用進階 AI）"
-        : `AI 引擎：${d.ai_provider}`;
+        ? "AI 引擎：離線規則（可到「設定」選擇大語言模型）"
+        : `AI 引擎：${d.ai_provider_label}`;
       _loaded = true;
     } catch (_) {}
   }
@@ -96,4 +97,5 @@
   $("dg2-cidr").addEventListener("keydown", e => { if (e.key === "Enter") subnet(); });
   document.querySelector('.nav-item[data-tab="diag"]')
     ?.addEventListener("click", () => setTimeout(loadInfo, 60));
+  window.addEventListener("settings:saved", () => { _loaded = false; loadInfo(); });
 })();

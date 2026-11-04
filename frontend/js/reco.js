@@ -38,7 +38,7 @@ const Reco = (() => {
           </div>
           <div>
             <span class="diag-sev-badge ${SEV_BADGE[issue.severity]}">${SEV_TXT[issue.severity]}</span>
-            <div style="font-size:12px;color:var(--text-3);margin-top:3px;text-align:center">${esc(issue.category)}</div>
+            <div style="font-size: calc(12px * var(--fs, 1));color:var(--text-3);margin-top:3px;text-align:center">${esc(issue.category)}</div>
           </div>
         </div>`).join("");
     }

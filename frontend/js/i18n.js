@@ -28,9 +28,10 @@ const I18N = (() => {
     "儲存設定": "Save Settings", "儲存白標": "Save Branding", "測試連線": "Test Connection",
     // 設定頁
     "AI 分析引擎": "AI Analysis Engine", "白標（報告抬頭）": "White-label (Report Header)",
-    "隱私": "Privacy", "離線規則引擎": "Offline Rule Engine", "進階雲端分析": "Cloud Analysis (Premium)",
-    "公司名稱": "Company Name", "聯絡資訊": "Contact Info", "雲端端點": "Cloud Endpoint",
-    "雲端授權 Token": "Cloud Auth Token",
+    "隱私": "Privacy", "離線規則引擎": "Offline Rule Engine",
+    "公司名稱": "Company Name", "聯絡資訊": "Contact Info",
+    "大語言模型": "LLM Model", "模型名稱": "Model Name", "字型大小": "Font Size",
+    "從供應商載入模型清單": "Load Models from Provider",
     // 卡片標籤（常見）
     "存活設備": "Live Devices", "閘道": "Gateway", "網段": "Subnet", "掃描進度": "Scan Progress",
     "訊號 RSSI": "Signal (RSSI)", "健康分數": "Health Score", "鄰居 AP": "Neighbor APs",

@@ -252,7 +252,7 @@ const SpectrumTab = (() => {
     ctx.miterLimit = 10;
     ctx.setLineDash([]);
     ctx.lineDashOffset = 0;
-    ctx.font = "12px sans-serif";
+    ctx.font = `${fs(12)}px sans-serif`;
     ctx.textAlign = "start";
     ctx.textBaseline = "alphabetic";
     ctx.shadowBlur = 0;
@@ -284,7 +284,7 @@ const SpectrumTab = (() => {
     ctx.fillRect(0, 0, W, H);
 
     // Grid + dBm labels
-    ctx.font = "11px -apple-system";
+    ctx.font = `${fs(11)}px -apple-system`;
     for (let db = DB_TOP; db >= DB_BOT; db -= 10) {
       const y = dbToY(db, H);
       ctx.strokeStyle = "rgba(255,255,255,.06)";
@@ -339,7 +339,7 @@ const SpectrumTab = (() => {
       // Label
       const ssid = (n.ssid && !n.ssid.startsWith("<")) ? n.ssid : "(隱藏)";
       const label = `ch${n.channel} ${ssid.length > 16 ? ssid.slice(0, 15) + "…" : ssid}`;
-      ctx.font = `${isConn ? "700 13px" : "500 11px"} -apple-system`;
+      ctx.font = `${isConn ? "700" : "500"} ${fs(isConn ? 13 : 11)}px -apple-system`;
       const tw = ctx.measureText(label).width;
       ctx.fillStyle = "#0b0d14cc";
       ctx.fillRect(xP - tw/2 - 4, yTop - 16, tw + 8, 13);
@@ -399,7 +399,7 @@ const SpectrumTab = (() => {
       ctx.fill();
       const ssid = (top.ssid && !top.ssid.startsWith("<")) ? top.ssid : "(隱藏)";
       const txt = `▲ 峰值 ${top.rssi} dBm · ch${top.channel} · ${ssid}`;
-      ctx.font = "600 12px -apple-system";
+      ctx.font = `600 ${fs(12)}px -apple-system`;
       ctx.textAlign = xP > W / 2 ? "right" : "left";
       const tx = xP > W / 2 ? xP - 8 : xP + 8;
       const tw = ctx.measureText(txt).width;
@@ -411,7 +411,7 @@ const SpectrumTab = (() => {
 
     // 圖例
     if (_showMaxHold || _showAvg) {
-      ctx.font = "11px -apple-system";
+      ctx.font = `${fs(11)}px -apple-system`;
       ctx.textAlign = "left";
       let lx = ML + 4;
       if (_showMaxHold) {
@@ -426,7 +426,7 @@ const SpectrumTab = (() => {
 
     if (!nets.length) {
       ctx.fillStyle = "rgba(255,255,255,.25)";
-      ctx.font = "14.5px -apple-system";
+      ctx.font = `${fs(14.5)}px -apple-system`;
       ctx.textAlign = "center";
       ctx.fillText(_sweeps ? `此頻段（${_band}）目前無 AP` : "掃描中…", W / 2, H / 2);
     }
@@ -451,7 +451,7 @@ const SpectrumTab = (() => {
     ctx.drawImage(wf.off, ML, 0, plotW, plotH);
 
     // Channel ticks
-    ctx.font = "11px -apple-system";
+    ctx.font = `${fs(11)}px -apple-system`;
     ctx.textAlign = "center";
     for (const ch of TICKS[_band]) {
       const x = freqToX(chFreq(ch, _band), W);
@@ -517,7 +517,7 @@ const SpectrumTab = (() => {
     const R = Math.min(_rows.length, ROWS_3D);
     if (!R) {
       ctx.fillStyle = "rgba(255,255,255,.25)";
-      ctx.font = "14.5px -apple-system";
+      ctx.font = `${fs(14.5)}px -apple-system`;
       ctx.textAlign = "center";
       ctx.fillText("等待掃描資料…", W / 2, H / 2);
       return;
@@ -573,7 +573,7 @@ const SpectrumTab = (() => {
     }
 
     // 前緣頻道刻度
-    ctx.font = "11px -apple-system";
+    ctx.font = `${fs(11)}px -apple-system`;
     ctx.textAlign = "center";
     ctx.fillStyle = "rgba(255,255,255,.4)";
     const dz0 = 0, ox0 = originX(dz0), w0 = rowW(dz0), by0 = baseYof(dz0);
@@ -635,13 +635,13 @@ const SpectrumTab = (() => {
       const top = nets.reduce((a, b) => (a.rssi > b.rssi ? a : b));
       const ssid = (top.ssid && !top.ssid.startsWith("<")) ? top.ssid : "(隱藏)";
       document.getElementById("spa-strongest").innerHTML =
-        `${top.rssi} <span style="font-size:13px;color:var(--text-2)">dBm · ${escHtml(ssid)}</span>`;
+        `${top.rssi} <span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)">dBm · ${escHtml(ssid)}</span>`;
 
       const byCh = {};
       nets.forEach(n => { byCh[n.channel] = (byCh[n.channel] || 0) + 1; });
       const busiest = Object.entries(byCh).sort((a, b) => b[1] - a[1])[0];
       document.getElementById("spa-busiest").innerHTML =
-        `ch${escHtml(busiest[0])} <span style="font-size:13px;color:var(--text-2)">${escHtml(busiest[1])} AP</span>`;
+        `ch${escHtml(busiest[0])} <span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)">${escHtml(busiest[1])} AP</span>`;
     } else {
       document.getElementById("spa-strongest").textContent = "—";
       document.getElementById("spa-busiest").textContent   = "—";

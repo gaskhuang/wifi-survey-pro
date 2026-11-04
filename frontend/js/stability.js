@@ -110,8 +110,8 @@ function updateStabCards(s) {
   const set  = (id, v) => { document.getElementById(id).innerHTML = v; };
 
   if (last && last.connected) {
-    set("stab-rssi", `${escHtml(last.rssi)} <span style="font-size:13px;color:var(--text-2)">dBm</span>`);
-    set("stab-snr",  `${escHtml(last.snr)} <span style="font-size:13px;color:var(--text-2)">dB</span>`);
+    set("stab-rssi", `${escHtml(last.rssi)} <span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)">dBm</span>`);
+    set("stab-snr",  `${escHtml(last.snr)} <span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)">dB</span>`);
   } else if (last) {
     set("stab-rssi", `<span style="color:#ef4444">斷線</span>`);
     set("stab-snr", "—");
@@ -123,13 +123,13 @@ function updateStabCards(s) {
     return null;
   };
   const gw = lastMs(s.ping_gw), inet = lastMs(s.ping_inet);
-  set("stab-gw",   gw   !== null ? `${gw.toFixed(1)} <span style="font-size:13px;color:var(--text-2)">ms</span>` : "—");
-  set("stab-inet", inet !== null ? `${inet.toFixed(1)} <span style="font-size:13px;color:var(--text-2)">ms</span>` : "—");
+  set("stab-gw",   gw   !== null ? `${gw.toFixed(1)} <span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)">ms</span>` : "—");
+  set("stab-inet", inet !== null ? `${inet.toFixed(1)} <span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)">ms</span>` : "—");
 
   const all  = [...s.ping_gw, ...s.ping_inet];
   const lost = all.filter(p => p.ms === null).length;
   set("stab-loss", all.length
-    ? `${(lost / all.length * 100).toFixed(1)}<span style="font-size:13px;color:var(--text-2)">%</span>`
+    ? `${(lost / all.length * 100).toFixed(1)}<span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)">%</span>`
     : "—");
   set("stab-events", s.events.length
     ? `<span style="color:#eab308">${s.events.length}</span>` : "0");

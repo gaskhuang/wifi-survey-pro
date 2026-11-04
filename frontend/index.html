@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NetInspect Pro</title>
+<!-- 字型大小：fs(n) = 基準字級 × 使用者設定倍率；/api/ui.js 在畫面出現前套用已儲存的倍率 -->
+<script>window.FS = 1; window.fs = n => Math.round(n * (window.FS || 1) * 2) / 2;</script>
+<script src="/api/ui.js"></script>
 <script defer src="js/chart.umd.min.js"></script>
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -78,7 +81,7 @@
       </div>
       <div class="conn-row">
         <span id="conn-tx">Tx — Mbps</span>
-        <span id="conn-std" style="color:var(--text-3);font-size:12px"></span>
+        <span id="conn-std" style="color:var(--text-3);font-size: calc(12px * var(--fs, 1))"></span>
       </div>
       <div class="conn-qbar-wrap">
         <div id="conn-qbar" class="conn-qbar"></div>
@@ -95,7 +98,7 @@
       <div class="tab-header">
         <h1>現場診斷</h1>
         <div class="actions">
-          <label style="font-size:13px;color:var(--text-2)">穩定度時長</label>
+          <label style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)">穩定度時長</label>
           <select id="dg-duration" class="select-input">
             <option value="30" selected>30 秒</option>
             <option value="60">60 秒</option>
@@ -118,7 +121,7 @@
           <div class="dg-hint">
             一鍵完成：環境掃描 → 頻道分析 → Ping 測試 → 速度測試 → 穩定度測試 → AI 建議行動
           </div>
-          <div class="dg-hint" id="dg-ai-provider" style="margin-top:4px;font-size:12px"></div>
+          <div class="dg-hint" id="dg-ai-provider" style="margin-top:4px;font-size: calc(12px * var(--fs, 1))"></div>
         </div>
 
         <!-- 進度 -->
@@ -171,7 +174,7 @@
         <!-- WiFi interface selector -->
         <div style="display:flex;align-items:center;gap:5px">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="rgba(255,255,255,.4)"/></svg>
-          <select id="iface-select" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:4px;color:var(--text-2);font-size:12px;padding:3px 6px;cursor:pointer;outline:none">
+          <select id="iface-select" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:4px;color:var(--text-2);font-size: calc(12px * var(--fs, 1));padding:3px 6px;cursor:pointer;outline:none">
             <option value="">載入中...</option>
           </select>
         </div>
@@ -179,8 +182,8 @@
           <svg viewBox="0 0 24 24" class="we-search-icon"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input type="text" id="scan-search" class="we-search" placeholder="Filter">
         </div>
-        <button class="btn btn-outline" style="font-size:12px;padding:4px 10px" id="btn-export-csv-scan">CSV</button>
-        <button class="btn btn-outline" style="font-size:12px;padding:4px 10px" id="btn-export-json-scan">JSON</button>
+        <button class="btn btn-outline" style="font-size: calc(12px * var(--fs, 1));padding:4px 10px" id="btn-export-csv-scan">CSV</button>
+        <button class="btn btn-outline" style="font-size: calc(12px * var(--fs, 1));padding:4px 10px" id="btn-export-json-scan">JSON</button>
         <button class="we-scan-btn" id="btn-scan">
           <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
           Scan
@@ -467,7 +470,7 @@
             <div class="thresh-row"><span class="dot" style="background:#eab308"></span>≥ -67 dBm 語音/漫遊</div>
             <div class="thresh-row"><span class="dot" style="background:#f97316"></span>≥ -70 dBm 普通</div>
             <div class="thresh-row"><span class="dot" style="background:#ef4444"></span>&lt; -70 dBm 死角補 AP</div>
-            <div class="thresh-row" style="margin-top:8px;color:var(--text-3);font-size:12px">等高線：-65/-75/-85 dBm</div>
+            <div class="thresh-row" style="margin-top:8px;color:var(--text-3);font-size: calc(12px * var(--fs, 1))">等高線：-65/-75/-85 dBm</div>
           </div>
         </div>
       </div>
@@ -586,7 +589,7 @@
       <div class="tab-header">
         <h1>iperf3 吞吐量測試</h1>
         <div class="actions">
-          <span id="ip3-install-note" class="hidden" style="font-size:13px;color:#f97316">未安裝 → brew install iperf3</span>
+          <span id="ip3-install-note" class="hidden" style="font-size: calc(13px * var(--fs, 1));color:#f97316">未安裝 → brew install iperf3</span>
         </div>
       </div>
 
@@ -756,15 +759,15 @@
 
       <div class="cards-row" id="lan-cards">
         <div class="card"><div class="card-label">存活設備</div><div class="card-val" id="lan-count">—</div></div>
-        <div class="card"><div class="card-label">閘道</div><div class="card-val" id="lan-gw" style="font-size:18px">—</div></div>
-        <div class="card"><div class="card-label">網段</div><div class="card-val" id="lan-subnet" style="font-size:17px">—</div></div>
+        <div class="card"><div class="card-label">閘道</div><div class="card-val" id="lan-gw" style="font-size: calc(18px * var(--fs, 1))">—</div></div>
+        <div class="card"><div class="card-label">網段</div><div class="card-val" id="lan-subnet" style="font-size: calc(17px * var(--fs, 1))">—</div></div>
         <div class="card"><div class="card-label">掃描進度</div><div class="card-val" id="lan-scanned">—</div></div>
       </div>
 
       <div id="lan-typebar" class="lan-typebar"></div>
 
       <div class="chart-section" style="flex:1;min-height:0;display:flex;flex-direction:column">
-        <div class="section-title">設備清單 <span id="lan-live-hint" class="muted" style="font-size:13px"></span></div>
+        <div class="section-title">設備清單 <span id="lan-live-hint" class="muted" style="font-size: calc(13px * var(--fs, 1))"></span></div>
         <div class="table-wrap" style="flex:1;overflow:auto">
           <table class="net-table lan-table">
             <thead><tr>
@@ -787,15 +790,15 @@
         <h1>AI 診斷</h1>
         <div class="actions">
           <label class="lan-check" id="dg2-ai-wrap" style="display:none">
-            <input type="checkbox" id="dg2-ai"> 進階 AI 分析
+            <input type="checkbox" id="dg2-ai"> AI 深入分析
           </label>
-          <span id="dg2-provider" class="muted" style="font-size:13px"></span>
+          <span id="dg2-provider" class="muted" style="font-size: calc(13px * var(--fs, 1))"></span>
         </div>
       </div>
 
       <div class="set-section">
         <div class="section-title">一鍵診斷</div>
-        <p class="hint">點按鈕即依離線規則引擎判讀；設定 AI 供應商後可勾「進階 AI 分析」取得更深入建議。</p>
+        <p class="hint">點按鈕即依離線規則引擎判讀；到「設定」選擇大語言模型並填入 API 金鑰後，會再交給該模型做深入分析。</p>
         <div class="dg2-btns">
           <button class="btn btn-primary" data-topic="all">🩺 一鍵全項</button>
           <button class="btn btn-outline" data-topic="osi">OSI 由下而上</button>
@@ -803,7 +806,7 @@
           <button class="btn btn-outline" data-topic="dhcp">DHCP / IP</button>
           <button class="btn btn-outline" data-topic="nat">NAT / 路由</button>
         </div>
-        <div id="dg2-status" class="muted" style="font-size:14.5px;margin-top:8px"></div>
+        <div id="dg2-status" class="muted" style="font-size: calc(14.5px * var(--fs, 1));margin-top:8px"></div>
       </div>
 
       <div id="dg2-steps" class="set-section" style="display:none">
@@ -813,8 +816,8 @@
 
       <div class="reco-panel" id="dg2-reco" hidden></div>
       <div id="dg2-ai-out" class="set-section" style="display:none">
-        <div class="section-title">🤖 AI 深入分析 <span id="dg2-ai-provider" class="muted" style="font-size:13px"></span></div>
-        <div id="dg2-ai-text" style="font-size:15.5px;line-height:1.7;white-space:pre-wrap;color:var(--text-1)"></div>
+        <div class="section-title">🤖 AI 深入分析 <span id="dg2-ai-provider" class="muted" style="font-size: calc(13px * var(--fs, 1))"></span></div>
+        <div id="dg2-ai-text" style="font-size: calc(15.5px * var(--fs, 1));line-height:1.7;white-space:pre-wrap;color:var(--text-1)"></div>
       </div>
 
       <div class="set-section">
@@ -858,7 +861,7 @@
       </div>
 
       <div class="chart-section" style="padding-bottom:4px">
-        <div class="section-title">流量排行 Top Talkers <span class="muted" style="font-size:13px">（依封包數；佔比高者可能異常發送）</span></div>
+        <div class="section-title">流量排行 Top Talkers <span class="muted" style="font-size: calc(13px * var(--fs, 1))">（依封包數；佔比高者可能異常發送）</span></div>
         <div class="table-wrap" style="max-height:300px;overflow:auto">
           <table class="net-table lan-table">
             <thead><tr><th>#</th><th>來源 MAC</th><th>廠牌</th><th>範例 IP</th><th>封包</th><th>pps</th><th>佔比</th><th>廣播/ARP</th></tr></thead>
@@ -945,28 +948,44 @@
 
       <div class="set-section">
         <div class="section-title">AI 分析引擎</div>
-        <p class="hint">離線引擎免金鑰、離線可用；自備金鑰（BYOK）直接呼叫你選的供應商；進階雲端為付費分析（資料上傳分析主機，地端只顯示結果）。</p>
-        <div class="set-providers" id="set-providers">
-          <label class="set-radio"><input type="radio" name="ai-provider" value="offline"><span>離線規則引擎 <em>免金鑰・預設</em></span></label>
-          <label class="set-radio"><input type="radio" name="ai-provider" value="openai"><span>OpenAI</span></label>
-          <label class="set-radio"><input type="radio" name="ai-provider" value="gemini"><span>Google Gemini</span></label>
-          <label class="set-radio"><input type="radio" name="ai-provider" value="deepseek"><span>DeepSeek</span></label>
-          <label class="set-radio"><input type="radio" name="ai-provider" value="claude"><span>Anthropic Claude</span></label>
-          <label class="set-radio"><input type="radio" name="ai-provider" value="cloud"><span>進階雲端分析 <em>付費・訂閱</em></span></label>
+        <p class="hint">選擇要用的大語言模型，填入該供應商的 API 金鑰後按「儲存設定」，AI 診斷與現場診斷就會用它分析。離線規則引擎不需要金鑰，也不會連網。</p>
+        <div class="form-row">
+          <label for="ai-model">大語言模型</label>
+          <select id="ai-model" class="select-input set-wide"><option value="offline">載入中…</option></select>
         </div>
-
-        <div class="set-keys">
-          <div class="form-row"><label>OpenAI 金鑰</label><input type="password" id="key-openai" placeholder="sk-…（留空 = 不變更）"><input type="text" id="model-openai" class="set-model" placeholder="模型"></div>
-          <div class="form-row"><label>Gemini 金鑰</label><input type="password" id="key-gemini" placeholder="AIza…"><input type="text" id="model-gemini" class="set-model" placeholder="模型"></div>
-          <div class="form-row"><label>DeepSeek 金鑰</label><input type="password" id="key-deepseek" placeholder="sk-…"><input type="text" id="model-deepseek" class="set-model" placeholder="模型"></div>
-          <div class="form-row"><label>Claude 金鑰</label><input type="password" id="key-claude" placeholder="sk-ant-…"><input type="text" id="model-claude" class="set-model" placeholder="模型"></div>
-          <div class="form-row"><label>雲端端點</label><input type="text" id="cloud-endpoint" placeholder="https://你的分析主機/analyze"></div>
-          <div class="form-row"><label>雲端授權 Token</label><input type="password" id="cloud-token" placeholder="訂閱授權 token"></div>
+        <div class="form-row hidden" id="ai-custom-row">
+          <label for="ai-custom-model">模型名稱</label>
+          <input type="text" id="ai-custom-model" class="set-wide" placeholder="輸入供應商的模型 ID，例如 gpt-6-astra" maxlength="80" spellcheck="false" autocomplete="off">
         </div>
+        <div class="form-row hidden" id="ai-key-row">
+          <label for="ai-key" id="ai-key-label">API 金鑰</label>
+          <input type="password" id="ai-key" class="set-wide" placeholder="貼上 API 金鑰" autocomplete="off" spellcheck="false">
+          <button class="btn btn-outline" id="btn-ai-models" type="button">從供應商載入模型清單</button>
+        </div>
+        <div class="set-note" id="ai-key-note"></div>
         <div class="set-actions">
           <button class="btn btn-primary" id="btn-set-save">儲存設定</button>
           <button class="btn btn-outline" id="btn-set-test">測試連線</button>
-          <span id="set-status" class="muted" style="font-size:14.5px"></span>
+          <span id="set-status" class="muted" style="font-size: calc(14.5px * var(--fs, 1))"></span>
+        </div>
+      </div>
+
+      <div class="set-section">
+        <div class="section-title">字型大小</div>
+        <p class="hint">調整整個介面的文字大小（含圖表上的字），選了立即套用並記住。</p>
+        <div class="form-row">
+          <label for="ui-font">字型大小</label>
+          <select id="ui-font" class="select-input">
+            <option value="0.8">80%（最小）</option>
+            <option value="0.9">90%</option>
+            <option value="1">100%（預設）</option>
+            <option value="1.1">110%</option>
+            <option value="1.2">120%</option>
+            <option value="1.3">130%</option>
+            <option value="1.4">140%</option>
+            <option value="1.5">150%（最大）</option>
+          </select>
+          <span id="ui-font-status" class="muted" style="font-size: calc(14.5px * var(--fs, 1))"></span>
         </div>
       </div>
 

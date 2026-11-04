@@ -122,8 +122,8 @@ function renderBandwidthAwareChart(band, networks, canvasId) {
         y: {
           min: 0, max: 100,
           grid:  { color: "rgba(255,255,255,.04)" },
-          ticks: { color: "#64748b", font: { size: 9.5 } },
-          title: { display: true, text: "壅塞", color: "#64748b", font: { size: 9.5 } },
+          ticks: { color: "#64748b", font: { size: fs(9.5) } },
+          title: { display: true, text: "壅塞", color: "#64748b", font: { size: fs(9.5) } },
         },
         x: {
           grid: { display: false },
@@ -133,7 +133,7 @@ function renderBandwidthAwareChart(band, networks, canvasId) {
               if (band === "2.4GHz" && NON_OVERLAP_24.has(ch)) return "#60a5fa";
               return "#64748b";
             },
-            font: { size: 9.5 }, maxRotation: 0,
+            font: { size: fs(9.5) }, maxRotation: 0,
             callback: (_, idx) => {
               const ch = allChans[idx];
               if (band === "2.4GHz") return NON_OVERLAP_24.has(ch) ? `●${ch}` : `${ch}`;
@@ -171,9 +171,9 @@ function renderBestChannels(band, bandData, elId) {
   if (!bandData) return;
   const el   = document.getElementById(elId);
   const best = (bandData.best_channels || []).slice(0, 4);
-  if (!best.length) { el.innerHTML = '<span style="color:var(--text-3);font-size:12px">無數據</span>'; return; }
+  if (!best.length) { el.innerHTML = '<span style="color:var(--text-3);font-size: calc(12px * var(--fs, 1))">無數據</span>'; return; }
 
-  el.innerHTML = `<span style="font-size:12px;color:var(--text-2);margin-right:5px">建議：</span>` +
+  el.innerHTML = `<span style="font-size: calc(12px * var(--fs, 1));color:var(--text-2);margin-right:5px">建議：</span>` +
     best.map((b, i) => {
       const cls = i === 0 ? "good" : b.congestion > 40 ? "warn" : "";
       const dfs = b.is_dfs ? " ⚠DFS" : "";

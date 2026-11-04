@@ -578,7 +578,7 @@ def api_diagnose_stream():
 
         # 7: AI 分析（背景執行 + 心跳，讓前端顯示經過時間）
         if do_ai:
-            provider_hint = "Codex AI" if ai_advisor.codex_available() else "離線規則引擎"
+            provider_hint = ai_advisor.engine_label()
             yield ev("step", {"key": "ai", "label": f"AI 智慧分析（{provider_hint}）",
                               "status": "running"})
             holder: dict = {}
@@ -641,22 +641,87 @@ def api_settings_get():
 
 @app.route("/api/settings", methods=["POST"])
 def api_settings_save():
-    patch = request.get_json(silent=True) or {}
-    # 安全：ai.keys 中的空字串視為「不變更」，避免把已存金鑰洗掉
-    try:
-        keys = patch.get("ai", {}).get("keys")
-        if isinstance(keys, dict):
-            patch["ai"]["keys"] = {k: v for k, v in keys.items() if v}
-        cloud = patch.get("ai", {}).get("cloud")
-        if isinstance(cloud, dict) and cloud.get("token") == "":
-            cloud.pop("token", None)
-    except Exception:
-        pass
+    raw = request.get_json(silent=True) or {}
+    patch, err = _clean_settings_patch(raw)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
     try:
         appconfig.save(patch)
     except Exception as e:
         return jsonify({"ok": False, "error": f"設定寫入失敗：{e}"}), 500
     return jsonify({"ok": True, "settings": appconfig.public_view()})
+
+
+_MODEL_RE = __import__("re").compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}")
+
+
+def _clean_settings_patch(raw: dict):
+    """只收認得的欄位並驗證：模型名稱會進 API 網址，必須是安全字元；
+    金鑰空字串＝不變更（避免把已存金鑰洗掉）。回傳 (patch, 錯誤訊息)。"""
+    patch = {}
+    ai = raw.get("ai")
+    if isinstance(ai, dict):
+        out = {}
+        if "provider" in ai:
+            if ai["provider"] not in ai_providers.PROVIDER_NAMES:
+                return None, "不支援的 AI 引擎"
+            out["provider"] = ai["provider"]
+        models = ai.get("models")
+        if isinstance(models, dict):
+            out["models"] = {}
+            for p, m in models.items():
+                m = str(m or "").strip()
+                if p not in ai_providers.KEYED or not m:
+                    continue
+                if not _MODEL_RE.fullmatch(m):
+                    return None, f"模型名稱格式不正確：{m[:40]}"
+                out["models"][p] = m
+        keys = ai.get("keys")
+        if isinstance(keys, dict):
+            out["keys"] = {p: str(k).strip() for p, k in keys.items()
+                           if p in ai_providers.KEYED and str(k or "").strip()}
+        patch["ai"] = out
+    ui = raw.get("ui")
+    if isinstance(ui, dict) and "font_scale" in ui:
+        try:
+            fs = float(ui["font_scale"])
+        except (TypeError, ValueError):
+            return None, "字型大小格式不正確"
+        if not 0.8 <= fs <= 1.5:
+            return None, "字型大小超出範圍"
+        patch["ui"] = {"font_scale": fs}
+    for k in ("branding", "privacy"):
+        if isinstance(raw.get(k), dict):
+            patch[k] = raw[k]
+    return patch, None
+
+
+@app.route("/api/ai/catalog")
+def api_ai_catalog():
+    return jsonify({"ok": True, **ai_providers.catalog()})
+
+
+@app.route("/api/ai/models", methods=["POST"])
+def api_ai_models():
+    """用（剛輸入或已儲存的）金鑰向供應商查詢可用模型。金鑰只用於這次查詢，不儲存。"""
+    data = request.get_json(silent=True) or {}
+    provider = data.get("provider")
+    if provider not in ai_providers.KEYED:
+        return jsonify({"ok": False, "error": "這個選項不需要選模型"}), 400
+    try:
+        models = ai_providers.list_models(provider, str(data.get("key") or "").strip() or None)
+        return jsonify({"ok": True, "models": models})
+    except Exception as e:
+        return jsonify({"ok": False, "error": ai_providers.friendly_error(e)})
+
+
+@app.route("/api/ui.js")
+def api_ui_js():
+    """index.html 的 <head> 同步載入：在畫面出現前套用字型大小，避免先閃一下預設大小。"""
+    fs = appconfig.get("ui.font_scale", 1.0)
+    js = f"window.FS={float(fs)};document.documentElement.style.setProperty('--fs','{float(fs)}');"
+    return Response(js, mimetype="application/javascript",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.route("/api/ai/test", methods=["POST"])
@@ -668,21 +733,25 @@ def api_ai_test():
 
 # ─── AI 診斷 / 網路診斷工具（P3）──────────────────────────────────────────────
 def _ai_enhance(title, assessment):
-    """若已設定 AI 供應商，就把離線診斷結果送去做深入分析（best-effort）。"""
-    provider = appconfig.get("ai.provider", "offline")
-    if provider == "offline":
+    """設定頁選了 AI 引擎（有金鑰的雲端模型或 Codex）就把離線診斷結果送去做深入分析（best-effort）。"""
+    provider = ai_advisor.current_engine()
+    if provider == "rules":
         return None
+    label = ai_advisor.engine_label(provider)
     try:
         lines = [f"- [{i['severity']}] {i['title']}：{i.get('problem','')} → {i['recommendation']}"
                  for i in assessment.get("issues", [])]
         user = (f"以下是網路現場「{title}」的自動診斷結果（分數 {assessment.get('score')}）：\n"
                 + "\n".join(lines)
                 + "\n\n請以繁體中文，站在資深網路工程師角度，給出更深入的可能根因與具體排查步驟（條列、精簡）。")
-        txt = ai_providers.call_provider(
-            provider, "你是資深網路工程師，協助現場工程師快速定位並解決網路問題。", user)
-        return {"provider": provider, "text": str(txt)}
+        system = "你是資深網路工程師，協助現場工程師快速定位並解決網路問題。"
+        if provider == "codex":
+            txt = ai_advisor.codex_text(system + "\n\n" + user)
+        else:
+            txt = ai_providers.call_provider(provider, system, user)
+        return {"provider": label, "text": str(txt)}
     except Exception as e:
-        return {"provider": provider, "error": str(e)[:180]}
+        return {"provider": label, "error": ai_providers.friendly_error(e)}
 
 
 @app.route("/api/diag/run", methods=["POST"])
@@ -718,7 +787,8 @@ def api_diag_traceroute():
 def api_diag_info():
     return jsonify({"route": net_diag.route_info(),
                     "dns_servers": net_diag.dns_servers(),
-                    "ai_provider": appconfig.get("ai.provider", "offline")})
+                    "ai_provider": ai_advisor.current_engine(),
+                    "ai_provider_label": ai_advisor.engine_label()})
 
 
 # ─── 整合檢測報告（P4）────────────────────────────────────────────────────────
@@ -1082,7 +1152,8 @@ def api_info():
         "platform": platform.platform(),
         "corewlan": _check_corewlan(),
         "bands":    scanner.get_supported_bands(),
-        "ai_provider": "codex" if ai_advisor.codex_available() else "rules",
+        "ai_provider": ai_advisor.current_engine(),
+        "ai_provider_label": ai_advisor.engine_label(),
     })
 
 

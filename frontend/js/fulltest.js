@@ -140,7 +140,7 @@ function renderDiagResult(assessment, current, netperf, networks) {
         </div>
         <div>
           <span class="diag-sev-badge ${sevBadge[issue.severity]}">${sevBadgeTx[issue.severity]}</span>
-          <div style="font-size:12px;color:var(--text-3);margin-top:3px;text-align:center">${escHtml(issue.category)}</div>
+          <div style="font-size: calc(12px * var(--fs, 1));color:var(--text-3);margin-top:3px;text-align:center">${escHtml(issue.category)}</div>
         </div>
       </div>`).join("");
   }
@@ -207,7 +207,7 @@ function updateReportPreviewFromDiag(d) {
     <p style="margin-top:6px">偵測 ${d.networks?.length||0} 個鄰近網路（2.4G:${(s.bands||{})["2.4GHz"]||0} / 5G:${(s.bands||{})["5GHz"]||0} / 6G:${(s.bands||{})["6GHz"]||0}）</p>
     <p>發現 <span style="color:#ef4444">${a.counts.critical} 個嚴重問題</span>、<span style="color:#eab308">${a.counts.warning} 個警告</span>、<span style="color:#3b82f6">${a.counts.info} 個建議</span></p>
     ${a.issues.filter(i => i.severity === "critical" || i.severity === "warning").slice(0,3).map(i =>
-      `<div style="margin-top:8px;padding:6px 10px;background:rgba(255,255,255,.03);border-left:2px solid ${i.severity==="critical"?"#ef4444":"#eab308"};border-radius:3px;font-size:13px">
+      `<div style="margin-top:8px;padding:6px 10px;background:rgba(255,255,255,.03);border-left:2px solid ${i.severity==="critical"?"#ef4444":"#eab308"};border-radius:3px;font-size: calc(13px * var(--fs, 1))">
         <strong>${escHtml(i.title)}</strong><br><span style="color:var(--text-2)">${escHtml(i.recommendation)}</span>
       </div>`).join("")}
   `;

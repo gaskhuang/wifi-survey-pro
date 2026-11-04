@@ -3,7 +3,30 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 // 圖表預設字級（Chart.js 預設 12px）跟著介面放大 20%
-if (window.Chart) Chart.defaults.font.size = 14;
+if (window.Chart) Chart.defaults.font.size = fs(14);
+
+// 即時套用字型大小（設定頁）：CSS 字級跟著 --fs；已建立的圖表依比例調整後重畫，
+// 不重新載入頁面（否則已完成的測試結果會不見）
+window.applyFontScale = scale => {
+  const old = window.FS || 1;
+  if (!scale || scale === old) return;
+  window.FS = scale;
+  document.documentElement.style.setProperty("--fs", String(scale));
+  const k = scale / old, seen = new WeakSet();
+  const walk = o => {
+    if (!o || typeof o !== "object" || seen.has(o)) return;
+    seen.add(o);
+    for (const [key, v] of Object.entries(o)) {
+      if (key === "font" && v && typeof v.size === "number") v.size = Math.round(v.size * k * 2) / 2;
+      else if (v && typeof v === "object") walk(v);
+    }
+  };
+  if (window.Chart) {
+    Chart.defaults.font.size = fs(14);
+    Object.values(Chart.instances || {}).forEach(c => { try { walk(c.config.options); c.update("none"); } catch (_) {} });
+  }
+  window.dispatchEvent(new Event("resize"));   // 自繪的 canvas（頻譜、瀑布圖）跟著重畫
+};
 
 window.APP = {
   networks:    [],

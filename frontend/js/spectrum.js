@@ -147,7 +147,7 @@ const Spectrum = (() => {
 
     // ── Y-axis labels ─────────────────────────────────────────────────────────
     ctx.fillStyle = "rgba(255,255,255,.28)";
-    ctx.font      = "11px -apple-system";
+    ctx.font      = `${fs(11)}px -apple-system`;
     for (let pct = 0; pct <= 100; pct += 10) {
       const y = MT + CH * (1 - pct / 100);
       ctx.textAlign = "right";
@@ -252,14 +252,14 @@ const Spectrum = (() => {
     const showLabel = ssid && ssid !== "<Hidden>";
     const bandText  = `ch${net.channel}`;
     // Format: "ch11 SSID" (truncate SSID if too long)
-    const maxChars  = Math.max(4, Math.floor((xR - xL) / 7.8));
+    const maxChars  = Math.max(4, Math.floor((xR - xL) / (7.8 * (window.FS || 1))));
     const ssidTrunc = showLabel
       ? (ssid.length > maxChars ? ssid.slice(0, maxChars - 1) + "…" : ssid)
       : null;
     const labelText = ssidTrunc ? `${bandText} ${ssidTrunc}` : bandText;
 
     // Font size: bigger for connected/hovered
-    const fontSize = isConn || isHovered ? 13 : 11;
+    const fontSize = fs(isConn || isHovered ? 13 : 11);
     ctx.font = `${isConn ? "700" : "500"} ${fontSize}px -apple-system`;
     const textW = ctx.measureText(labelText).width;
     const textH = fontSize + 2;
@@ -335,7 +335,7 @@ const Spectrum = (() => {
       }
 
       ctx.fillStyle = "rgba(255,255,255,.2)";
-      ctx.font      = "bold 11px -apple-system";
+      ctx.font      = `bold ${fs(11)}px -apple-system`;
       ctx.textAlign = "center";
       ctx.fillText(lo.band === "2.4GHz" ? "ISM / 2.4 GHz" : lo.band, (x0+x1)/2, H - 3);
     });
@@ -356,7 +356,7 @@ const Spectrum = (() => {
         ctx.strokeRect(xA, MT + CH + 2, xB - xA, 12);
 
         ctx.fillStyle = "rgba(160,190,255,.65)";
-        ctx.font      = "9.5px -apple-system";
+        ctx.font      = `${fs(9.5)}px -apple-system`;
         ctx.textAlign = "center";
         ctx.fillText(label, cx, MT + CH + 11);
       });
@@ -368,7 +368,7 @@ const Spectrum = (() => {
     ctx.fillStyle   = "rgba(255,255,255,.33)";
     ctx.strokeStyle = "rgba(255,255,255,.13)";
     ctx.lineWidth   = 0.5;
-    ctx.font        = "9.5px -apple-system";
+    ctx.font        = `${fs(9.5)}px -apple-system`;
     ctx.textAlign   = "center";
 
     const NON_OV = new Set([1, 6, 11]);
@@ -379,10 +379,10 @@ const Spectrum = (() => {
       if (x < ML || x > ML+CW) continue;
       if (NON_OV.has(ch)) {
         ctx.fillStyle = "rgba(96,165,250,.8)";
-        ctx.font      = "bold 9.5px -apple-system";
+        ctx.font      = `bold ${fs(9.5)}px -apple-system`;
       } else {
         ctx.fillStyle = "rgba(255,255,255,.33)";
-        ctx.font      = "9.5px -apple-system";
+        ctx.font      = `${fs(9.5)}px -apple-system`;
       }
       ctx.fillText(ch, x, MT + CH + MB * 0.42);
       ctx.beginPath(); ctx.moveTo(x, MT+CH); ctx.lineTo(x, MT+CH+3); ctx.stroke();
@@ -391,7 +391,7 @@ const Spectrum = (() => {
     // 5 GHz major ticks
     const ticks5 = [36,40,44,48,52,56,60,64,100,108,116,124,132,140,144,149,153,157,161,165];
     ctx.fillStyle = "rgba(255,255,255,.33)";
-    ctx.font      = "9.5px -apple-system";
+    ctx.font      = `${fs(9.5)}px -apple-system`;
     ticks5.forEach(ch => {
       const x = _chToX(ch, "5GHz", CW, layout);
       if (x < ML || x > ML+CW) return;
@@ -423,7 +423,7 @@ const Spectrum = (() => {
       tooltip.style.cssText = [
         "position:absolute","pointer-events:none","z-index:20",
         "background:rgba(10,12,20,.92)","border:1px solid rgba(255,255,255,.12)",
-        "border-radius:6px","padding:7px 11px","font-size:13px",
+        "border-radius:6px","padding:7px 11px","font-size: calc(13px * var(--fs, 1))",
         "color:#e2e8f0","line-height:1.7","display:none",
         "white-space:nowrap","box-shadow:0 4px 16px rgba(0,0,0,.5)",
       ].join(";");
@@ -452,7 +452,7 @@ const Spectrum = (() => {
         const bssidText = hit.bssid?.startsWith("<") ? "需定位授權" : hit.bssid;
         tooltip.innerHTML = [
           `<strong style="color:${escHtml(_networkColor(hit))}">${escHtml(hit.ssid || "(Hidden)")}</strong>`,
-          `BSSID: <span style="font-family:monospace;font-size:12px">${escHtml(bssidText)}</span>`,
+          `BSSID: <span style="font-family:monospace;font-size: calc(12px * var(--fs, 1))">${escHtml(bssidText)}</span>`,
           `訊號: <strong>${escHtml(hit.rssi)} dBm</strong> &nbsp; SNR: ${escHtml(hit.snr)} dB &nbsp; ${escHtml(hit.signal_pct)}%`,
           `頻道: <strong>ch${escHtml(hit.channel)}</strong> &nbsp; ${escHtml(hit.band)} &nbsp; ${escHtml(hit.width)} MHz`,
           `標準: ${escHtml(hit.standard)}`,
@@ -535,7 +535,7 @@ const Spectrum = (() => {
         badge.textContent = "● PAUSED";
         badge.style.cssText = [
           "position:absolute","bottom:28px","left:8px","z-index:10",
-          "font-size:11px","font-weight:700","letter-spacing:.08em",
+          "font-size: calc(11px * var(--fs, 1))","font-weight:700","letter-spacing:.08em",
           "color:#22c55e","pointer-events:none",
           "text-shadow:0 0 8px rgba(34,197,94,.5)",
         ].join(";");
@@ -560,7 +560,7 @@ const Spectrum = (() => {
       "position:absolute","top:5px","right:56px","z-index:10",
       "padding:3px 9px","background:rgba(30,30,50,.8)",
       "border:1px solid rgba(255,255,255,.15)","border-radius:4px",
-      "font-size:12px","color:rgba(255,255,255,.6)","cursor:pointer",
+      "font-size: calc(12px * var(--fs, 1))","color:rgba(255,255,255,.6)","cursor:pointer",
       "display:flex","align-items:center","gap:4px",
     ].join(";");
     freezeBtn.addEventListener("click", () => {
@@ -590,7 +590,7 @@ const Spectrum = (() => {
       "position:absolute","top:5px","right:140px","z-index:10",
       "padding:3px 8px","background:rgba(30,30,50,.8)",
       "border:1px solid rgba(255,255,255,.15)","border-radius:4px",
-      "font-size:12px","color:#e2e8f0","width:110px",
+      "font-size: calc(12px * var(--fs, 1))","color:#e2e8f0","width:110px",
       "outline:none",
     ].join(";");
     filterInput.addEventListener("input", e => {
