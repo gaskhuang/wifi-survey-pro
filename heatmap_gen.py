@@ -251,13 +251,37 @@ def _apply_colormap(norm: "np.ndarray") -> "np.ndarray":
     return rgba
 
 
-def _draw_measurement_points(draw, width: int, height: int, metric: str,
-                             pts: list = None):
+# 圖例含中文：Helvetica 沒有中文字形（會變成方框）→ 改用系統內建中文字型
+_FONT_CANDIDATES = [
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/Helvetica.ttc",
+]
+_font_cache: dict = {}
+
+
+def _font(size: int):
+    if size in _font_cache:
+        return _font_cache[size]
+    f = None
     try:
         from PIL import ImageFont
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 10)
+        for p in _FONT_CANDIDATES:
+            try:
+                f = ImageFont.truetype(p, size)
+                break
+            except Exception:
+                continue
     except Exception:
-        font = None
+        pass
+    _font_cache[size] = f
+    return f
+
+
+def _draw_measurement_points(draw, width: int, height: int, metric: str,
+                             pts: list = None):
+    font = _font(12)
 
     for pt in (pts if pts is not None else get_measurements()):
         px = int(pt["x"] * width)
@@ -284,11 +308,7 @@ def _draw_measurement_points(draw, width: int, height: int, metric: str,
 
 
 def _draw_legend(draw, width: int, height: int, metric: str):
-    try:
-        from PIL import ImageFont
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 10)
-    except Exception:
-        font = None
+    font = _font(12)
 
     if metric == "snr":
         legend = [
@@ -315,12 +335,12 @@ def _draw_legend(draw, width: int, height: int, metric: str):
         ]
         title = "RSSI 圖層"
 
-    bx, by = width - 155, height - len(legend) * 20 - 28
-    draw.rectangle([bx-5, by-18, width-5, height-5], fill=(15, 15, 25, 190))
-    draw.text((bx, by - 14), title, fill=(200, 200, 200, 220), font=font)
+    bx, by = width - 175, height - len(legend) * 22 - 30
+    draw.rectangle([bx-5, by-20, width-5, height-5], fill=(15, 15, 25, 190))
+    draw.text((bx, by - 16), title, fill=(200, 200, 200, 220), font=font)
     for i, (label, color) in enumerate(legend):
-        y = by + i * 20
-        draw.rectangle([bx, y, bx+14, y+12], fill=(*color, 220))
+        y = by + i * 22
+        draw.rectangle([bx, y + 1, bx+14, y+13], fill=(*color, 220))
         draw.text((bx + 18, y), label, fill=(220, 220, 220, 255), font=font)
 
 

@@ -184,8 +184,8 @@ document.getElementById("btn-clear-pts").addEventListener("click", async () => {
 });
 
 // ── Export ────────────────────────────────────────────────────────────────────
-document.getElementById("btn-export-meas-csv").addEventListener("click",  () => window.location.href = "/api/heatmap/export_csv");
-document.getElementById("btn-export-meas-json").addEventListener("click", () => window.location.href = "/api/heatmap/export_json");
+document.getElementById("btn-export-meas-csv").addEventListener("click",  () => downloadURL("/api/heatmap/export_csv", "heatmap_measurements.csv").catch(e => alert(e.message)));
+document.getElementById("btn-export-meas-json").addEventListener("click", () => downloadURL("/api/heatmap/export_json", "heatmap_measurements.json").catch(e => alert(e.message)));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function drawDotOnCanvas(xPct, yPct, rssi, id) {
@@ -200,7 +200,7 @@ function drawDotOnCanvas(xPct, yPct, rssi, id) {
   ctx.strokeStyle = "#fff";
   ctx.lineWidth   = 1.5;
   ctx.fill(); ctx.stroke();
-  ctx.fillStyle = "#fff"; ctx.font = "bold 8px -apple-system"; ctx.textAlign = "center";
+  ctx.fillStyle = "#fff"; ctx.font = "bold 9.5px -apple-system"; ctx.textAlign = "center";
   ctx.fillText(`${rssi}`, px, py + 3);
 }
 
@@ -213,7 +213,7 @@ function addMeasurementRow(pt) {
   div.innerHTML = `
     <span class="mi-id">#${escHtml(pt.id+1)}</span>
     <span class="mi-rssi" style="color:${escHtml(pt.color||rssiToColor(pt.rssi))}">${escHtml(pt.rssi)}dBm${escHtml(sc)}</span>
-    <span style="color:var(--text-3);font-size:9px">${escHtml(pt.label)}</span>
+    <span style="color:var(--text-3);font-size:11px">${escHtml(pt.label)}</span>
     <span class="mi-del" onclick="delPoint(${Number(pt.id)})">✕</span>`;
   list.appendChild(div);
 }

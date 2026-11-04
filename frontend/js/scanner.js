@@ -12,8 +12,8 @@ const sortState   = { key: "signal_pct", dir: "desc" };
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 document.getElementById("btn-scan").addEventListener("click", doScan);
-document.getElementById("btn-export-csv-scan").addEventListener("click", () => window.location.href = "/api/export/networks");
-document.getElementById("btn-export-json-scan").addEventListener("click", () => window.location.href = "/api/export/json");
+document.getElementById("btn-export-csv-scan").addEventListener("click", () => downloadURL("/api/export/networks", "wifi_networks.csv").catch(e => alert(e.message)));
+document.getElementById("btn-export-json-scan").addEventListener("click", () => downloadURL("/api/export/json", "wifi_networks.json").catch(e => alert(e.message)));
 
 // Filter tabs
 document.querySelectorAll(".we-tab[data-filter]").forEach(btn => {
@@ -137,17 +137,17 @@ function renderNetTable(nets) {
     const sigColor = _signalColor(pct);
     const ssidHtml = _ssidCell(n);
     const vendorHtml = n.vendor
-      ? `<span style="font-size:10px">${escHtml(n.vendor)}</span>`
-      : `<span style="color:var(--text-3);font-size:10px">—</span>`;
+      ? `<span style="font-size:12px">${escHtml(n.vendor)}</span>`
+      : `<span style="color:var(--text-3);font-size:12px">—</span>`;
     const maxRate = n.max_rate != null
       ? `<span style="color:var(--text-2)">${escHtml(n.max_rate)} Mbps</span>`
       : "—";
     const gen = n.gen >= 4
       ? `<span class="gen-badge" style="color:${_genColor(n.gen)}">${escHtml(n.gen)}</span>`
       : "—";
-    const secHtml = `<span style="font-size:10px;color:var(--text-2)">${escHtml(n.security||"")}</span>`;
-    const seenHtml = `<span style="font-size:10px">${escHtml(n.seen_ago||"—")}</span>`;
-    const bssidDisp = String(n.bssid ?? "").startsWith("<") ? `<span style="color:var(--text-3);font-size:9px">${escHtml(n.bssid)}</span>` : escHtml(n.bssid);
+    const secHtml = `<span style="font-size:12px;color:var(--text-2)">${escHtml(n.security||"")}</span>`;
+    const seenHtml = `<span style="font-size:12px">${escHtml(n.seen_ago||"—")}</span>`;
+    const bssidDisp = String(n.bssid ?? "").startsWith("<") ? `<span style="color:var(--text-3);font-size:11px">${escHtml(n.bssid)}</span>` : escHtml(n.bssid);
 
     return `<tr class="net-row${isConn?" connected":""}" data-bssid="${escHtml(n.bssid)}" data-idx="${n._idx}">
       <td class="col-bar-cell"><div class="col-bar-inner" style="background:${escHtml(n.net_color)}"></div></td>
@@ -163,7 +163,7 @@ function renderNetTable(nets) {
       <td style="text-align:center;font-weight:600">${escHtml(n.channel)}</td>
       <td style="color:var(--text-2)">${escHtml(n.width)} MHz</td>
       <td style="color:var(--text-2)">${escHtml(n.band)}</td>
-      <td style="font-family:monospace;font-size:10px;color:var(--text-2)">${escHtml(n.mode||"")}</td>
+      <td style="font-family:monospace;font-size:12px;color:var(--text-2)">${escHtml(n.mode||"")}</td>
       <td style="text-align:center">${gen}</td>
       <td>${secHtml}</td>
       <td style="text-align:right">${maxRate}</td>

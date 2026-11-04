@@ -38,7 +38,7 @@ const Reco = (() => {
           </div>
           <div>
             <span class="diag-sev-badge ${SEV_BADGE[issue.severity]}">${SEV_TXT[issue.severity]}</span>
-            <div style="font-size:10px;color:var(--text-3);margin-top:3px;text-align:center">${esc(issue.category)}</div>
+            <div style="font-size:12px;color:var(--text-3);margin-top:3px;text-align:center">${esc(issue.category)}</div>
           </div>
         </div>`).join("");
     }
@@ -55,9 +55,12 @@ const Reco = (() => {
       <div class="reco-issues">${body}</div>`;
   }
 
+  const _last = {};   // containerId → { assessment, title }（匯出報告用）
+
   function render(containerId, assessment, opts = {}) {
     const el = document.getElementById(containerId);
     if (!el) return;
+    _last[containerId] = { assessment, title: opts.title || "優化建議方案" };
     el.innerHTML = panelHTML(assessment, opts.title);
     el.hidden = false;
     if (opts.scroll) el.scrollIntoView({ behavior:"smooth", block:"nearest" });
@@ -67,6 +70,7 @@ const Reco = (() => {
     const el = document.getElementById(containerId);
     if (!el) return;
     el.hidden = false;
+    delete _last[containerId];
     el.innerHTML = `<div class="reco-loading"><span class="spinner" style="width:13px;height:13px;border-color:rgba(255,255,255,.2);border-top-color:#3b82f6"></span> 產生優化建議中…</div>`;
     try {
       const r = await fetch("/api/recommend", {
@@ -82,5 +86,6 @@ const Reco = (() => {
     }
   }
 
-  return { render, fetchAndRender };
+  const last = id => _last[id] || null;
+  return { render, fetchAndRender, last };
 })();

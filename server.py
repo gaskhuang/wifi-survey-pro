@@ -755,6 +755,26 @@ def api_report_full():
                     headers={"Content-Disposition": f"attachment;filename=network_inspection_{ts}.pdf"})
 
 
+# ─── 單一功能報告：左側每個功能測完都可匯出 PDF ────────────────────────────────
+_FEATURE_KINDS = {"scanner", "channels", "spectrum", "heatmap", "monitor", "netperf",
+                  "iperf", "lan", "traffic", "diag"}
+
+
+@app.route("/api/report/feature", methods=["POST"])
+def api_report_feature():
+    data = request.get_json(silent=True) or {}
+    doc  = data.get("doc") or {}
+    kind = str(doc.get("kind") or "")
+    if kind not in _FEATURE_KINDS or not isinstance(doc.get("sections"), list):
+        return jsonify({"ok": False, "error": "報告內容格式錯誤"}), 400
+    site_info = data.get("site_info") if isinstance(data.get("site_info"), dict) else {}
+    branding  = appconfig.load().get("branding", {})
+    pdf = reporter.generate_feature_report(doc, site_info, branding)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f"attachment;filename=NetInspect_{kind}_{ts}.pdf"})
+
+
 # ─── LAN 有線盤查 ─────────────────────────────────────────────────────────────
 _LAST_LAN = {}      # 最近一次掃描結果（供 result / export 使用）
 _LAST_TRAFFIC = {}  # 最近一次流量監測結果（供整合報告使用）

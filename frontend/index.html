@@ -78,7 +78,7 @@
       </div>
       <div class="conn-row">
         <span id="conn-tx">Tx — Mbps</span>
-        <span id="conn-std" style="color:var(--text-3);font-size:10px"></span>
+        <span id="conn-std" style="color:var(--text-3);font-size:12px"></span>
       </div>
       <div class="conn-qbar-wrap">
         <div id="conn-qbar" class="conn-qbar"></div>
@@ -95,7 +95,7 @@
       <div class="tab-header">
         <h1>現場診斷</h1>
         <div class="actions">
-          <label style="font-size:11px;color:var(--text-2)">穩定度時長</label>
+          <label style="font-size:13px;color:var(--text-2)">穩定度時長</label>
           <select id="dg-duration" class="select-input">
             <option value="30" selected>30 秒</option>
             <option value="60">60 秒</option>
@@ -118,7 +118,7 @@
           <div class="dg-hint">
             一鍵完成：環境掃描 → 頻道分析 → Ping 測試 → 速度測試 → 穩定度測試 → AI 建議行動
           </div>
-          <div class="dg-hint" id="dg-ai-provider" style="margin-top:4px;font-size:10px"></div>
+          <div class="dg-hint" id="dg-ai-provider" style="margin-top:4px;font-size:12px"></div>
         </div>
 
         <!-- 進度 -->
@@ -171,7 +171,7 @@
         <!-- WiFi interface selector -->
         <div style="display:flex;align-items:center;gap:5px">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="rgba(255,255,255,.4)"/></svg>
-          <select id="iface-select" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:4px;color:var(--text-2);font-size:10px;padding:3px 6px;cursor:pointer;outline:none">
+          <select id="iface-select" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:4px;color:var(--text-2);font-size:12px;padding:3px 6px;cursor:pointer;outline:none">
             <option value="">載入中...</option>
           </select>
         </div>
@@ -179,8 +179,8 @@
           <svg viewBox="0 0 24 24" class="we-search-icon"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input type="text" id="scan-search" class="we-search" placeholder="Filter">
         </div>
-        <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" id="btn-export-csv-scan">CSV</button>
-        <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" id="btn-export-json-scan">JSON</button>
+        <button class="btn btn-outline" style="font-size:12px;padding:4px 10px" id="btn-export-csv-scan">CSV</button>
+        <button class="btn btn-outline" style="font-size:12px;padding:4px 10px" id="btn-export-json-scan">JSON</button>
         <button class="we-scan-btn" id="btn-scan">
           <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
           Scan
@@ -467,7 +467,7 @@
             <div class="thresh-row"><span class="dot" style="background:#eab308"></span>≥ -67 dBm 語音/漫遊</div>
             <div class="thresh-row"><span class="dot" style="background:#f97316"></span>≥ -70 dBm 普通</div>
             <div class="thresh-row"><span class="dot" style="background:#ef4444"></span>&lt; -70 dBm 死角補 AP</div>
-            <div class="thresh-row" style="margin-top:8px;color:var(--text-3);font-size:10px">等高線：-65/-75/-85 dBm</div>
+            <div class="thresh-row" style="margin-top:8px;color:var(--text-3);font-size:12px">等高線：-65/-75/-85 dBm</div>
           </div>
         </div>
       </div>
@@ -586,7 +586,7 @@
       <div class="tab-header">
         <h1>iperf3 吞吐量測試</h1>
         <div class="actions">
-          <span id="ip3-install-note" class="hidden" style="font-size:11px;color:#f97316">未安裝 → brew install iperf3</span>
+          <span id="ip3-install-note" class="hidden" style="font-size:13px;color:#f97316">未安裝 → brew install iperf3</span>
         </div>
       </div>
 
@@ -756,15 +756,15 @@
 
       <div class="cards-row" id="lan-cards">
         <div class="card"><div class="card-label">存活設備</div><div class="card-val" id="lan-count">—</div></div>
-        <div class="card"><div class="card-label">閘道</div><div class="card-val" id="lan-gw" style="font-size:15px">—</div></div>
-        <div class="card"><div class="card-label">網段</div><div class="card-val" id="lan-subnet" style="font-size:14px">—</div></div>
+        <div class="card"><div class="card-label">閘道</div><div class="card-val" id="lan-gw" style="font-size:18px">—</div></div>
+        <div class="card"><div class="card-label">網段</div><div class="card-val" id="lan-subnet" style="font-size:17px">—</div></div>
         <div class="card"><div class="card-label">掃描進度</div><div class="card-val" id="lan-scanned">—</div></div>
       </div>
 
       <div id="lan-typebar" class="lan-typebar"></div>
 
       <div class="chart-section" style="flex:1;min-height:0;display:flex;flex-direction:column">
-        <div class="section-title">設備清單 <span id="lan-live-hint" class="muted" style="font-size:11px"></span></div>
+        <div class="section-title">設備清單 <span id="lan-live-hint" class="muted" style="font-size:13px"></span></div>
         <div class="table-wrap" style="flex:1;overflow:auto">
           <table class="net-table lan-table">
             <thead><tr>
@@ -789,7 +789,7 @@
           <label class="lan-check" id="dg2-ai-wrap" style="display:none">
             <input type="checkbox" id="dg2-ai"> 進階 AI 分析
           </label>
-          <span id="dg2-provider" class="muted" style="font-size:11px"></span>
+          <span id="dg2-provider" class="muted" style="font-size:13px"></span>
         </div>
       </div>
 
@@ -803,7 +803,7 @@
           <button class="btn btn-outline" data-topic="dhcp">DHCP / IP</button>
           <button class="btn btn-outline" data-topic="nat">NAT / 路由</button>
         </div>
-        <div id="dg2-status" class="muted" style="font-size:12px;margin-top:8px"></div>
+        <div id="dg2-status" class="muted" style="font-size:14.5px;margin-top:8px"></div>
       </div>
 
       <div id="dg2-steps" class="set-section" style="display:none">
@@ -813,8 +813,8 @@
 
       <div class="reco-panel" id="dg2-reco" hidden></div>
       <div id="dg2-ai-out" class="set-section" style="display:none">
-        <div class="section-title">🤖 AI 深入分析 <span id="dg2-ai-provider" class="muted" style="font-size:11px"></span></div>
-        <div id="dg2-ai-text" style="font-size:13px;line-height:1.7;white-space:pre-wrap;color:var(--text-1)"></div>
+        <div class="section-title">🤖 AI 深入分析 <span id="dg2-ai-provider" class="muted" style="font-size:13px"></span></div>
+        <div id="dg2-ai-text" style="font-size:15.5px;line-height:1.7;white-space:pre-wrap;color:var(--text-1)"></div>
       </div>
 
       <div class="set-section">
@@ -858,7 +858,7 @@
       </div>
 
       <div class="chart-section" style="padding-bottom:4px">
-        <div class="section-title">流量排行 Top Talkers <span class="muted" style="font-size:11px">（依封包數；佔比高者可能異常發送）</span></div>
+        <div class="section-title">流量排行 Top Talkers <span class="muted" style="font-size:13px">（依封包數；佔比高者可能異常發送）</span></div>
         <div class="table-wrap" style="max-height:300px;overflow:auto">
           <table class="net-table lan-table">
             <thead><tr><th>#</th><th>來源 MAC</th><th>廠牌</th><th>範例 IP</th><th>封包</th><th>pps</th><th>佔比</th><th>廣播/ARP</th></tr></thead>
@@ -966,7 +966,7 @@
         <div class="set-actions">
           <button class="btn btn-primary" id="btn-set-save">儲存設定</button>
           <button class="btn btn-outline" id="btn-set-test">測試連線</button>
-          <span id="set-status" class="muted" style="font-size:12px"></span>
+          <span id="set-status" class="muted" style="font-size:14.5px"></span>
         </div>
       </div>
 
@@ -997,6 +997,7 @@
 <script defer src="js/spectrum.js"></script>
 <script defer src="js/scanner.js"></script>
 <script defer src="js/location.js"></script>
+<script defer src="js/feature_report.js"></script>
 <script defer src="js/channels.js"></script>
 <script defer src="js/heatmap.js"></script>
 <script defer src="js/monitor.js"></script>

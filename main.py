@@ -14,18 +14,18 @@ PORT = int(os.environ.get("WIFISURVEY_PORT", "5173"))
 
 _LOADING_HTML = """<!doctype html><html><head><meta charset="utf-8">
 <style>html,body{margin:0;height:100%;background:#0f1117;color:#94a3b8;
-font:14px -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif;
+font:17px -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif;
 display:flex;align-items:center;justify-content:center}
-.b{text-align:center}.t{color:#e2e8f0;font-size:18px;font-weight:700;margin-bottom:8px}
+.b{text-align:center}.t{color:#e2e8f0;font-size:22px;font-weight:700;margin-bottom:8px}
 .s{width:22px;height:22px;border:2px solid #2a2f45;border-top-color:#3b82f6;border-radius:50%;
 margin:14px auto 0;animation:r .8s linear infinite}@keyframes r{to{transform:rotate(360deg)}}
 </style></head><body><div class="b"><div class="t">NetInspect Pro</div>啟動中…<div class="s"></div></div></body></html>"""
 
 _ERROR_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%;background:#0f1117;color:#e2e8f0;
-font:14px -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif;display:flex;align-items:center;justify-content:center}
-.b{max-width:520px;text-align:center;line-height:1.7}.e{color:#f87171;font-weight:700;font-size:16px}
-code{color:#94a3b8;font-size:12px}</style></head><body><div class="b">
+font:17px -apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif;display:flex;align-items:center;justify-content:center}
+.b{max-width:520px;text-align:center;line-height:1.7}.e{color:#f87171;font-weight:700;font-size:19px}
+code{color:#94a3b8;font-size:14.5px}</style></head><body><div class="b">
 <div class="e">背景服務啟動失敗</div>請關閉後重新開啟。若持續發生，請把下列記錄檔寄給技術支援：<br>
 <code>{log}</code></div></body></html>"""
 
@@ -163,6 +163,9 @@ def main():
         webview = None
     if webview is not None:
         try:
+            # pywebview 預設禁止下載 → 所有 PDF / CSV / JSON 匯出按了都沒反應；
+            # 開啟後 <a download> 會跳出系統存檔視窗
+            webview.settings["ALLOW_DOWNLOADS"] = True
             win = webview.create_window(
                 title     = "NetInspect Pro",
                 html      = _LOADING_HTML,          # 先出現視窗，後端就緒再切主畫面

@@ -216,11 +216,11 @@ const LAN = (() => {
   $("btn-lan-scan").addEventListener("click", startScan);
   $("btn-lan-csv").addEventListener("click", () => {
     if (!_result) { showStatus("請先掃描", true); return; }
-    window.location.href = "/api/lan/export?fmt=csv";
+    downloadURL("/api/lan/export?fmt=csv", "lan_hosts.csv").catch(e => showStatus(e.message, true));
   });
   $("btn-lan-json").addEventListener("click", () => {
     if (!_result) { showStatus("請先掃描", true); return; }
-    window.location.href = "/api/lan/export?fmt=json";
+    downloadURL("/api/lan/export?fmt=json", "lan_hosts.json").catch(e => showStatus(e.message, true));
   });
   $("lan-tbody").addEventListener("click", e => {
     const b = e.target.closest("button[data-act]");

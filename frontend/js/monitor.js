@@ -97,7 +97,7 @@ function initMonChart() {
         const yp = y.getPixelForValue(v);
         c.save(); c.strokeStyle = col; c.lineWidth = 1; c.setLineDash([2,4]);
         c.beginPath(); c.moveTo(chart.chartArea.left, yp); c.lineTo(chart.chartArea.right, yp); c.stroke();
-        c.fillStyle = col.replace(".45",".8"); c.font = "8px -apple-system";
+        c.fillStyle = col.replace(".45",".8"); c.font = "9.5px -apple-system";
         c.fillText(l, chart.chartArea.left+4, yp-2); c.restore();
       });
     }
@@ -131,25 +131,25 @@ function initMonChart() {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: "index", intersect: false },
       scales: {
-        x: { grid: { color: "rgba(255,255,255,.04)" }, ticks: { color: "#64748b", font: { size: 8 }, maxTicksLimit: 10, maxRotation: 0 } },
+        x: { grid: { color: "rgba(255,255,255,.04)" }, ticks: { color: "#64748b", font: { size: 9.5 }, maxTicksLimit: 10, maxRotation: 0 } },
         y: {
           min: -100, max: -20,
           grid: { color: "rgba(255,255,255,.05)" },
-          ticks: { color: "#64748b", font: { size: 8 } },
-          title: { display: true, text: "RSSI (dBm)", color: "#64748b", font: { size: 8 } },
+          ticks: { color: "#64748b", font: { size: 9.5 } },
+          title: { display: true, text: "RSSI (dBm)", color: "#64748b", font: { size: 9.5 } },
         },
         y2: {
           position: "right", min: 0, max: 60,
           grid: { display: false },
-          ticks: { color: "#22c55e66", font: { size: 8 } },
-          title: { display: true, text: "SNR", color: "#22c55e66", font: { size: 8 } },
+          ticks: { color: "#22c55e66", font: { size: 9.5 } },
+          title: { display: true, text: "SNR", color: "#22c55e66", font: { size: 9.5 } },
         },
         y3: {
           position: "right", min: 0, max: 100, display: false,
         }
       },
       plugins: {
-        legend: { labels: { color: "#94a3b8", font: { size: 9 }, boxWidth: 10 } },
+        legend: { labels: { color: "#94a3b8", font: { size: 11 }, boxWidth: 10 } },
         tooltip: {
           callbacks: {
             label: ctx => {

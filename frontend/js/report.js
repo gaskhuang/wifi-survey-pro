@@ -25,11 +25,8 @@ async function generateFullReport() {
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
     const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-    a.href = url; a.download = `network-inspection-${ts}.pdf`; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    saveBlob(blob, `network-inspection-${ts}.pdf`);
   } catch (e) {
     alert("完整報告產生失敗：" + e.message);
   } finally {
@@ -110,14 +107,7 @@ async function generateReport() {
     if (!resp.ok) throw new Error(`Server error ${resp.status}`);
 
     const blob = await resp.blob();
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `wifi_survey_${new Date().toISOString().slice(0,10)}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    saveBlob(blob, `wifi_survey_${new Date().toISOString().slice(0,10)}.pdf`);
 
     showStatus(status, "✓ PDF 報告已產生並下載！");
   } catch (e) {

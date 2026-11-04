@@ -38,12 +38,8 @@
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const blob = await r.blob();
-      const url  = URL.createObjectURL(blob);
-      const a = document.createElement("a");
       const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-      a.href = url; a.download = `wifi-diagnosis-${ts}.pdf`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      saveBlob(blob, `wifi-diagnosis-${ts}.pdf`);
     } catch (e) {
       alert("報告產生失敗：" + e.message);
     } finally {
@@ -78,7 +74,7 @@
       } else {
         el.className = "diag-step fail";
         el.innerHTML = `<span class="step-icon"></span>${escHtml(d.label)}` +
-          (d.error ? ` <span style="font-size:10px;color:var(--text-3)">（${escHtml(d.error)}）</span>` : "");
+          (d.error ? ` <span style="font-size:12px;color:var(--text-3)">（${escHtml(d.error)}）</span>` : "");
       }
     });
 
@@ -90,7 +86,7 @@
         ? `（${Math.round(d.elapsed)} / ${escHtml(d.total)} 秒）`
         : `（已分析 ${escHtml(d.elapsed)} 秒）`;
       const lbl = DG_STEPS.find(s => s.key === d.key)?.label || "";
-      el.innerHTML = `<span class="step-icon"></span>${lbl} <span style="font-size:10px;color:var(--text-3)">${extra}</span>`;
+      el.innerHTML = `<span class="step-icon"></span>${lbl} <span style="font-size:12px;color:var(--text-3)">${extra}</span>`;
     });
 
     _es.addEventListener("partial", e => {
@@ -155,7 +151,7 @@
         <div class="card-val" ${color ? `style="color:${color}"` : ""}>${val}</div>
         ${sub ? `<div class="card-sub">${sub}</div>` : ""}</div>`;
 
-    const fmt = (v, unit) => v != null ? `${escHtml(v)}<span style="font-size:11px;color:var(--text-2)"> ${unit}</span>` : "—";
+    const fmt = (v, unit) => v != null ? `${escHtml(v)}<span style="font-size:13px;color:var(--text-2)"> ${unit}</span>` : "—";
 
     document.getElementById("dg-cards").innerHTML = [
       card("訊號 RSSI", cur.connected ? fmt(cur.rssi, "dBm") : "未連線",
@@ -167,7 +163,7 @@
       card("掉包", fmt(np.ping_loss_pct, "%"),
            "", np.ping_loss_pct > 0 ? "#ef4444" : "#22c55e"),
       card("穩定度", stab.score != null
-           ? `${escHtml(stab.score)}<span style="font-size:11px;color:var(--text-2)"> /100</span>` : "—",
+           ? `${escHtml(stab.score)}<span style="font-size:13px;color:var(--text-2)"> /100</span>` : "—",
            escHtml(stab.grade?.label || ""), escHtml(stab.grade?.color || "")),
     ].join("");
   }
@@ -212,7 +208,7 @@
       const bw  = (gx1 - gx0) / g.chans.length;
 
       ctx.fillStyle = "rgba(255,255,255,.35)";
-      ctx.font = "bold 9px -apple-system";
+      ctx.font = "bold 11px -apple-system";
       ctx.textAlign = "left";
       ctx.fillText(g.band, gx0, 11);
 
@@ -242,19 +238,19 @@
         }
         if (cnt) {
           ctx.fillStyle = "rgba(255,255,255,.75)";
-          ctx.font = "8px -apple-system";
+          ctx.font = "9.5px -apple-system";
           ctx.textAlign = "center";
           ctx.fillText(cnt, x + w/2, y - (isCur ? 12 : 3));
         }
         ctx.fillStyle = "rgba(255,255,255,.4)";
-        ctx.font = "8px -apple-system";
+        ctx.font = "9.5px -apple-system";
         ctx.textAlign = "center";
         ctx.fillText(ch, x + w/2, baseY + 11);
       });
     });
 
     // Legend
-    ctx.font = "9px -apple-system"; ctx.textAlign = "left";
+    ctx.font = "11px -apple-system"; ctx.textAlign = "left";
     const legend = [["#3b82f6","1 AP"],["#eab308","2-3 AP"],["#ef4444","≥4 AP 壅塞"],["#fff","▲ 目前頻道"]];
     let lx = W - 240;
     legend.forEach(([c, t]) => {
@@ -283,7 +279,7 @@
     summaryEl.innerHTML =
       `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
          <div><strong>AI 診斷摘要</strong>　${escHtml(ai.summary || "")}</div>
-         <div style="font-size:10.5px;color:var(--text-3);white-space:nowrap">${providerTxt} ｜ 健康分數 <strong style="color:${ai.score>=70?"#22c55e":ai.score>=50?"#eab308":"#ef4444"}">${escHtml(ai.score)}</strong>/100</div>
+         <div style="font-size:12.5px;color:var(--text-3);white-space:nowrap">${providerTxt} ｜ 健康分數 <strong style="color:${ai.score>=70?"#22c55e":ai.score>=50?"#eab308":"#ef4444"}">${escHtml(ai.score)}</strong>/100</div>
        </div>`;
 
     const PRIO = [
@@ -306,7 +302,7 @@
           </div>
           <div>
             <span class="diag-sev-badge ${p.badge}">${p.badgeTx}</span>
-            <div style="font-size:10px;color:var(--text-3);margin-top:3px;text-align:center">${escHtml(i.category || "")}</div>
+            <div style="font-size:12px;color:var(--text-3);margin-top:3px;text-align:center">${escHtml(i.category || "")}</div>
           </div>
         </div>`).join("");
     });

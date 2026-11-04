@@ -2,6 +2,9 @@
    app.js — Tab routing, shared state, connection status poller v2.1
    ═══════════════════════════════════════════════════════════════════════════ */
 
+// 圖表預設字級（Chart.js 預設 12px）跟著介面放大 20%
+if (window.Chart) Chart.defaults.font.size = 14;
+
 window.APP = {
   networks:    [],
   analysis:    {},
@@ -197,6 +200,32 @@ window.showStatus = (el, msg, isError=false) => {
   el.textContent = msg;
   el.classList.remove("hidden","error");
   if (isError) el.classList.add("error");
+};
+// 存檔：App 視窗（WKWebView）只認 <a download> 觸發的下載，且下載是非同步的，
+// 太早 revokeObjectURL 會讓存檔失敗 → 統一走這裡，延後一分鐘才釋放。
+window.saveBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename || "download";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
+// 下載伺服器產生的檔案（CSV/JSON/PDF）：不能用 location.href，
+// JSON 會直接在 App 視窗裡打開、蓋掉整個介面
+window.downloadURL = async (url, fallbackName, opts = {}) => {
+  const r = await fetch(url, opts);
+  if (!r.ok) {
+    let msg = `下載失敗（HTTP ${r.status}）`;
+    try { const j = await r.json(); if (j.error) msg = j.error; } catch (_) {}
+    throw new Error(msg);
+  }
+  const cd = r.headers.get("Content-Disposition") || "";
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  const name = m ? decodeURIComponent(m[1]) : fallbackName;
+  saveBlob(await r.blob(), name);
 };
 window.setLoading = (btn, loading) => {
   if (loading) { btn._origHTML = btn.innerHTML; btn.innerHTML = '<div class="spinner"></div>'; btn.disabled = true; }

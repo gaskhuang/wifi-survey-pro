@@ -6,6 +6,7 @@ NetInspect Pro — PDF report generator v3.0
 """
 import io
 import os
+import re
 import base64
 import threading
 from datetime import datetime
@@ -778,6 +779,267 @@ def _build_full_report(sections, site_info, branding):
               Paragraph(f"{_t(company) + ' · ' if company else ''}由 NetInspect Pro 產生 · "
                         f"{datetime.now().strftime('%Y-%m-%d %H:%M')}",
                         st("Foot", 8, color=GRAY, align=TA_CENTER))]
+    doc.build(story)
+    buf.seek(0)
+    return buf.read()
+
+
+# ── 單一功能報告（左側每個功能測完都可匯出）──────────────────────────────────────
+# 前端把該分頁的結果整理成 sections 傳來；這裡只負責排版，不信任任何內容：
+# 文字一律經 _t()/_p()，圖片用 PIL 驗證並重新編碼，數量與大小都有上限。
+_FR_MAX_SECTIONS = 40
+_FR_MAX_ROWS     = 500
+_FR_MAX_COLS     = 12
+_FR_MAX_CELL     = 300
+_FR_MAX_IMG_B    = 8 * 1024 * 1024
+_FR_MAX_IMG_PX   = 4096 * 4096
+
+_SEV_META = {
+    "critical": ("嚴重", "#dc2626"),
+    "warning":  ("警告", "#ca8a04"),
+    "info":     ("建議", "#2563eb"),
+    "good":     ("通過", "#16a34a"),
+}
+
+
+def _fr_image(data_url: str):
+    """data URL → (PNG bytes, w, h)；不是合法圖片就回 None。"""
+    if not isinstance(data_url, str) or not data_url:
+        return None
+    raw = data_url.split(",", 1)[-1]
+    if len(raw) > _FR_MAX_IMG_B * 4 // 3 + 16:
+        return None
+    try:
+        b = base64.b64decode(raw, validate=False)
+        from PIL import Image
+        im = Image.open(io.BytesIO(b))
+        if im.format not in ("PNG", "JPEG") or im.width * im.height > _FR_MAX_IMG_PX:
+            return None
+        im.load()
+        if im.mode not in ("RGB", "RGBA", "L"):
+            im = im.convert("RGBA")
+        out = io.BytesIO()
+        im.save(out, "PNG", optimize=False)
+        return out.getvalue(), im.width, im.height
+    except Exception:
+        return None
+
+
+def _fr_col_widths(columns, rows, total, font_size=7.5):
+    """欄寬：先量每欄自然寬度（CJK 約 1 字寬、半形約 0.55），
+    放得下就等比放大；放不下就找一個上限 cap，只讓超過 cap 的長欄換行（短欄如 BSSID 不被擠斷）。"""
+    def width(v):
+        t = str(v or "")[:80]
+        return sum(font_size if ord(c) > 0x2E80 else font_size * 0.56 for c in t) + 9
+    n = len(columns)
+    nat = [max([width(columns[i])] + [width(r[i]) for r in rows[:300] if i < len(r)]) for i in range(n)]
+    if sum(nat) <= total:
+        k = total / sum(nat)
+        return [x * k for x in nat]
+    lo, hi = 0.0, max(nat)
+    for _ in range(40):                     # 二分搜尋 cap，使 Σ min(nat, cap) = total
+        mid = (lo + hi) / 2
+        if sum(min(x, mid) for x in nat) > total:
+            hi = mid
+        else:
+            lo = mid
+    return [min(x, lo) for x in nat]
+
+
+def generate_feature_report(doc: dict, site_info: dict | None = None,
+                            branding: dict | None = None) -> bytes:
+    try:
+        from reportlab.lib.pagesizes import A4  # noqa: F401 — probe availability
+    except ImportError:
+        return b"reportlab not installed"
+    return _build_feature_report(doc or {}, site_info or {}, branding or {})
+
+
+def _build_feature_report(docd, site_info, branding):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, HRFlowable, CondPageBreak,
+                                    Table, TableStyle, KeepTogether, Image as RLImage)
+
+    FONT = _register_fonts()
+    buf = io.BytesIO()
+    W = A4[0] - 3.6*cm
+    title = str(docd.get("title") or "檢測報告")[:80]
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.8*cm, rightMargin=1.8*cm,
+                            topMargin=1.8*cm, bottomMargin=1.8*cm,
+                            title=title, author="NetInspect Pro")
+    BLUE, BLUE2 = colors.HexColor("#1e40af"), colors.HexColor("#1d4ed8")
+    GRAY = colors.HexColor("#64748b")
+
+    def st(name, size, color=colors.black, align=TA_LEFT, space_after=4):
+        return ParagraphStyle(name, fontName=FONT, fontSize=size, textColor=color,
+                              alignment=align, spaceAfter=space_after, leading=size*1.45)
+
+    H1   = st("H1", 23, BLUE, TA_CENTER, 4)
+    SUB  = st("Sub", 12, GRAY, TA_CENTER, 10)
+    H2   = st("H2", 15, BLUE2, space_after=6)
+    BODY = st("Body", 11, space_after=3)
+    SMAL = st("Smal", 9.5, GRAY, space_after=2)
+    CELL = st("Cell", 9, space_after=0)
+    KVV  = st("Kvv", 11, space_after=0)
+    HEAD = st("Head", 9, colors.white, space_after=0)
+    CO   = st("Co", 17, align=TA_CENTER, space_after=2)
+
+    story = []
+    company = str(branding.get("company") or "")
+    if company:
+        story.append(Paragraph(_t(company), CO))
+    story.append(Paragraph(_t(title), H1))
+    if docd.get("subtitle"):
+        story.append(Paragraph(_t(str(docd["subtitle"])[:160]), SUB))
+    story += [HRFlowable(width="100%", thickness=2, color=BLUE), Spacer(1, 0.35*cm)]
+
+    info = [["檢測時間", str(docd.get("tested_at") or datetime.now().strftime("%Y-%m-%d %H:%M"))[:40]]]
+    for k, label in (("site", "場地"), ("client", "客戶"), ("surveyor", "檢測人員")):
+        v = str(site_info.get(k) or "").strip()
+        if v:
+            info.append([label, v[:120]])
+    if branding.get("contact"):
+        info.append(["服務廠商", f"{company}　{branding['contact']}"[:160]])
+    story += [_kv_table(info, FONT, col_w=[3.2*cm, W - 3.2*cm], font_size=11), Spacer(1, 0.45*cm)]
+
+    secs = docd.get("sections") or []
+    if not isinstance(secs, list):
+        secs = []
+    num = "一二三四五六七八九十"
+    n = 0
+
+    def heading(t):
+        nonlocal n
+        label = f"{num[n]}、" if n < len(num) else f"{n + 1}. "
+        n += 1
+        return Paragraph(label + _t(str(t or "")[:80]), H2)
+
+    for sec in secs[:_FR_MAX_SECTIONS]:
+        if not isinstance(sec, dict):
+            continue
+        typ = sec.get("type")
+        block = []
+        if typ == "kv":
+            rows = [[str(r[0])[:60], str(r[1])[:_FR_MAX_CELL]] for r in (sec.get("rows") or [])[:80]
+                    if isinstance(r, (list, tuple)) and len(r) >= 2]
+            if not rows:
+                continue
+            block = [heading(sec.get("title")),
+                     _kv_table([[a, Paragraph(_t(b), KVV)] for a, b in rows], FONT,
+                               col_w=[4.6*cm, W - 4.6*cm], font_size=11)]
+        elif typ == "table":
+            cols = [str(c)[:40] for c in (sec.get("columns") or [])][:_FR_MAX_COLS]
+            raw = sec.get("rows") or []
+            if not cols or not isinstance(raw, list):
+                continue
+            rows = [[str("" if c is None else c)[:_FR_MAX_CELL] for c in (r or [])[:len(cols)]]
+                    + [""] * max(0, len(cols) - len(r or []))
+                    for r in raw[:_FR_MAX_ROWS] if isinstance(r, (list, tuple))]
+            block = [heading(sec.get("title"))]
+            if sec.get("note"):
+                block.append(Paragraph(_t(str(sec["note"])[:300]), SMAL))
+            if not rows:
+                block.append(Paragraph("（沒有資料）", BODY))
+            else:
+                data = [[Paragraph(_t(c), HEAD) for c in cols]] + \
+                       [[Paragraph(_t(c), CELL) for c in r] for r in rows]
+                tbl = Table(data, colWidths=_fr_col_widths(cols, rows, W, font_size=9), repeatRows=1)
+                tbl.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), BLUE),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#e2e8f0")),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8fafc"), colors.white]),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                ]))
+                block.append(tbl)
+                total = len(raw)
+                if total > len(rows):
+                    block.append(Paragraph(f"（僅列前 {len(rows)} 筆，共 {total} 筆）", SMAL))
+        elif typ == "image":
+            img = _fr_image(sec.get("image"))
+            if not img:
+                continue
+            png, iw, ih = img
+            w = W
+            h = w * ih / iw
+            if h > 19*cm:
+                h = 19*cm
+                w = h * iw / ih
+            block = [heading(sec.get("title")), RLImage(io.BytesIO(png), width=w, height=h)]
+            if sec.get("caption"):
+                block.append(Paragraph(_t(str(sec["caption"])[:300]), SMAL))
+        elif typ == "text":
+            paras = [str(x)[:4000] for x in (sec.get("paragraphs") or []) if str(x or "").strip()][:60]
+            if not paras:
+                continue
+            block = [heading(sec.get("title"))] + \
+                    [Paragraph(_t(x).replace("\n", "<br/>"), BODY) for x in paras]
+        elif typ == "steps":
+            items = [x for x in (sec.get("items") or []) if isinstance(x, dict)][:120]
+            if not items:
+                continue
+            block = [heading(sec.get("title"))]
+            for x in items:
+                ok = bool(x.get("ok"))
+                col = "#16a34a" if ok else "#dc2626"
+                block.append(Paragraph(
+                    f"<font color='{col}'>● [{'通過' if ok else '異常'}]</font> {_t(str(x.get('name',''))[:120])}："
+                    f"<font color='#64748b'>{_t(str(x.get('detail',''))[:400])}</font>", BODY))
+        elif typ == "assessment":
+            a = sec.get("assessment") or {}
+            if not isinstance(a, dict) or not (a.get("issues") or a.get("score") is not None):
+                continue
+            g = a.get("grade") or {}
+            gc = str(g.get("color") or "")
+            gcol = gc if re.fullmatch(r"#[0-9a-fA-F]{6}", gc) else "#64748b"   # 進 <font> 標記，只收色碼
+            block = [heading(sec.get("title") or "評分與優化建議")]
+            if a.get("score") is not None:
+                block.append(Paragraph(
+                    f"<font size='24' color='{gcol}'>{_t(a.get('score'))}</font>"
+                    f"<font size='12' color='#64748b'> / 100　</font>"
+                    f"<font size='13' color='{gcol}'>{_t(g.get('label',''))}</font>",
+                    ParagraphStyle("Score", fontName=FONT, fontSize=12, leading=30, spaceAfter=4)))
+            order = {"critical": 0, "warning": 1, "info": 2, "good": 3}
+            issues = sorted([i for i in (a.get("issues") or []) if isinstance(i, dict)][:80],
+                            key=lambda i: order.get(i.get("severity"), 4))
+            for i in issues:
+                lbl, col = _SEV_META.get(i.get("severity"), ("", "#000000"))
+                cat = f"<font color='#94a3b8'>　{_t(i.get('category'))}</font>" if i.get("category") else ""
+                rows = [Paragraph(f"<font color='{col}'>【{lbl}】{_t(str(i.get('title',''))[:200])}</font>{cat}", BODY)]
+                if i.get("problem"):
+                    rows.append(Paragraph(f"　{_t(str(i['problem'])[:600])}", SMAL))
+                if i.get("recommendation"):
+                    rows.append(Paragraph(f"　→ {_t(str(i['recommendation'])[:800])}", SMAL))
+                rows.append(Spacer(1, 0.12*cm))
+                block.append(KeepTogether(rows))
+            if not issues:
+                block.append(Paragraph(f"{_dot('#16a34a')} 沒有需要處理的問題。", BODY))
+        else:
+            continue
+        if not block:
+            continue
+        # 標題不要孤零零留在頁尾：剩不到 4cm 就換頁；圖片/指標表再跟標題綁在一起。
+        # 長表格不綁（綁了整張表會被推到下一頁，留下大片空白），改由 repeatRows 跨頁續表頭
+        story.append(CondPageBreak(4*cm))
+        if typ in ("table", "steps", "assessment", "text"):
+            story += block
+        else:
+            story.append(KeepTogether(block[:2]))
+            story += block[2:]
+        story.append(Spacer(1, 0.45*cm))
+
+    if n == 0:
+        story.append(Paragraph("（此報告沒有可列出的測試結果）", BODY))
+
+    story += [Spacer(1, 0.4*cm), HRFlowable(width="100%", thickness=0.8, color=GRAY),
+              Paragraph(f"{_t(company) + ' · ' if company else ''}由 NetInspect Pro 產生 · "
+                        f"{datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                        st("Foot", 9.5, GRAY, TA_CENTER))]
     doc.build(story)
     buf.seek(0)
     return buf.read()
