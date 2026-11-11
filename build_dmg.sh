@@ -153,6 +153,7 @@ import server, scanner, stability, lan_scanner, traffic_monitor, net_diag, iperf
 import reporter, recommender, recommendations, analyzer, ai_advisor, heatmap_gen
 import speedtest_cf, config, main, webview, numpy, PIL, reportlab, dns.resolver, CoreWLAN
 import location_auth, CoreLocation
+import device_probe, net_env
 heatmap_gen.add_measurement(0.2,0.2,-50,30,'',80,[]); heatmap_gen.add_measurement(0.8,0.7,-75,10,'',30,[])
 assert heatmap_gen.generate_heatmap(400,300,True,'rssi',False), 'heatmap 失敗'
 assert reporter.generate_diagnosis_pdf({}, {})[:5] == b'%PDF-', 'PDF 失敗'
@@ -185,6 +186,8 @@ cat > "$CONTENTS/Info.plist" << PLIST
     <string>NetInspect Pro 需要定位服務以顯示 Wi-Fi 的 SSID 和 BSSID 資訊。</string>
   <key>NSLocationAlwaysUsageDescription</key>
     <string>NetInspect Pro 需要定位服務以顯示 Wi-Fi 的 SSID 和 BSSID 資訊。</string>
+  <key>NSLocalNetworkUsageDescription</key>
+    <string>NetInspect Pro 需要存取區域網路，才能盤點網段內的設備並取得名稱與型號。</string>
 </dict>
 </plist>
 PLIST

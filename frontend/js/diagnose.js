@@ -1,8 +1,11 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   diagnose.js — 現場診斷首頁（一鍵測試 + AI 建議行動）
+   diagnose.js — 現場診斷首頁（一鍵看完整個網路 + AI 建議行動）
    EventSource → /api/diagnose/stream，依事件更新進度，完成後渲染：
-   上：數值儀表卡片 ＋ 頻道佔用長條圖
-   下：AI 建議行動清單（🔴 立即處理 / 🟡 建議調整 / 🟢 狀態正常）
+   · 數值儀表卡片（訊號、測速、延遲、穩定度、設備數、ISP）
+   · 網路環境（對外線路 / NAT 層數、區域網路 / DHCP / DNS、注意事項）
+   · 設備盤點（名稱 / 廠牌 / 類型 / 型號）
+   · 頻道佔用長條圖
+   · AI 建議行動清單（🔴 立即處理 / 🟡 建議調整 / 🟢 狀態正常）
    ═══════════════════════════════════════════════════════════════════════════ */
 
 (() => {
@@ -10,6 +13,8 @@
     { key: "scan",      label: "Wi-Fi 環境掃描" },
     { key: "analysis",  label: "頻道分析" },
     { key: "current",   label: "目前連線狀態" },
+    { key: "env",       label: "網路環境（閘道・DHCP・DNS・對外線路）" },
+    { key: "lan",       label: "設備盤點" },
     { key: "netperf",   label: "Ping / DNS 延遲測試" },
     { key: "speedtest", label: "網路速度測試（上傳/下載）" },
     { key: "stability", label: "連線穩定度測試" },
@@ -57,6 +62,8 @@
     btn.querySelector(".dg-bigbtn-label").textContent = "診斷中…";
     document.getElementById("dg-result").classList.add("hidden");
     document.getElementById("dg-progress").classList.remove("hidden");
+    document.getElementById("btn-dg-pdf").classList.add("hidden");
+    document.getElementById("dg-hero").classList.add("compact");     // 進度與結果要在第一屏
     renderSteps();
 
     _es = new EventSource(`/api/diagnose/stream?duration=${duration}&speedtest=1&ai=1`);
@@ -84,6 +91,7 @@
       if (!el || !el.classList.contains("running")) return;
       const extra = d.key === "stability"
         ? `（${Math.round(d.elapsed)} / ${escHtml(d.total)} 秒）`
+        : d.key === "lan" ? `（已掃描 ${escHtml(d.elapsed)} 秒）`
         : `（已分析 ${escHtml(d.elapsed)} 秒）`;
       const lbl = DG_STEPS.find(s => s.key === d.key)?.label || "";
       el.innerHTML = `<span class="step-icon"></span>${lbl} <span style="font-size: calc(12px * var(--fs, 1));color:var(--text-3)">${extra}</span>`;
@@ -92,6 +100,7 @@
     _es.addEventListener("partial", e => {
       const d = JSON.parse(e.data);
       _data[d.key] = d.data;
+      if (d.key === "lan" && typeof LAN !== "undefined") LAN.setResult(d.data);   // 「設備盤點」分頁同步
     });
 
     _es.addEventListener("done", () => { stopES(); renderResult(); });
@@ -111,7 +120,10 @@
   function resetBtn() {
     const btn = document.getElementById("btn-dg-start");
     btn.disabled = false;
-    btn.querySelector(".dg-bigbtn-label").textContent = "開始診斷";
+    const has = Object.keys(_data).length > 0;
+    btn.querySelector(".dg-bigbtn-label").textContent = has ? "重新診斷" : "開始診斷";
+    document.getElementById("dg-hero").classList.toggle("compact", has);
+    document.getElementById("btn-dg-pdf").classList.toggle("hidden", !has);
   }
 
   function renderSteps() {
@@ -134,6 +146,8 @@
     document.getElementById("dg-progress").classList.add("hidden");
     document.getElementById("dg-result").classList.remove("hidden");
     renderCards();
+    renderEnv();
+    renderDevices();
     drawChannelChart();
     renderAI();
     if (_data.scan?.length) APP.networks = _data.scan;
@@ -145,6 +159,8 @@
     const np   = _data.netperf   || {};
     const spd  = _data.speedtest || {};
     const stab = _data.stability || {};
+    const lan  = _data.lan;
+    const wan  = (_data.env || {}).wan;
 
     const card = (label, val, sub = "", color = "") => `
       <div class="card"><div class="card-label">${label}</div>
@@ -165,8 +181,82 @@
       card("穩定度", stab.score != null
            ? `${escHtml(stab.score)}<span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)"> /100</span>` : "—",
            escHtml(stab.grade?.label || ""), escHtml(stab.grade?.color || "")),
+      lan ? card("設備", `${escHtml(lan.alive_count ?? 0)}<span style="font-size: calc(13px * var(--fs, 1));color:var(--text-2)"> 台</span>`,
+                 escHtml(Object.entries(lan.summary || {}).sort((a, b) => b[1] - a[1]).slice(0, 2)
+                   .map(([t, c]) => `${t} ${c}`).join("、"))) : "",
+      wan ? card("對外線路", wan.online ? `<span style="font-size: calc(17px * var(--fs, 1))">${escHtml(wan.isp || "已連線")}</span>` : "離線",
+                 escHtml(wan.online ? [wan.city, wan.country].filter(Boolean).join(", ") : "無法連上網際網路"),
+                 wan.online ? "" : "#ef4444") : "",
     ].join("");
   }
+
+  // ── 網路環境：對外線路 / 區域網路 / 注意事項 ────────────────────────────────
+  const SEV_TXT = { critical: "嚴重", warning: "注意", info: "提醒", good: "正常" };
+  const kv = (k, v) => (v === undefined || v === null || v === "") ? ""
+    : `<div class="lan-kv"><span>${escHtml(k)}</span><b>${escHtml(v)}</b></div>`;
+
+  function renderEnv() {
+    const el = document.getElementById("dg-env");
+    const env = _data.env;
+    if (!env) { el.innerHTML = ""; return; }
+    const lan = env.lan || {}, wan = env.wan || {}, nat = wan.nat || {};
+    const dhcp = lan.dhcp || {};
+    const lease = dhcp.lease_sec
+      ? (dhcp.lease_sec >= 3600 ? `${+(dhcp.lease_sec / 3600).toFixed(1)} 小時` : `${Math.round(dhcp.lease_sec / 60)} 分鐘`) : "";
+    const natTxt = !wan.online ? "" : nat.double_nat ? `雙重 NAT（${(nat.routers || []).length} 層路由器）`
+      : (nat.private_hops ? "單層 NAT（正常）" : "");
+    const hops = (nat.hops || []).filter(h => h.ip).map(h =>
+      `<code>${escHtml(h.ip)}</code>${h.kind !== "公網" ? `<span style="color:var(--text-3)">（${escHtml(h.kind)}）</span>` : ""}`).join(" → ");
+    const notes = (env.issues || []).map(i => `
+      <div class="dg-note"><span class="tag ${escHtml(i.severity)}">${SEV_TXT[i.severity] || ""}</span>
+        <div><b>${escHtml(i.title)}</b>${i.problem ? `　${escHtml(i.problem)}` : ""}
+          ${i.recommendation ? `<div class="rec">→ ${escHtml(i.recommendation)}</div>` : ""}</div></div>`).join("");
+    el.innerHTML = `
+      <div class="dg-envbox"><h3>對外線路</h3>
+        ${kv("狀態", wan.online ? "已連上網際網路" : "無法連上網際網路")}
+        ${kv("ISP", wan.isp)}${kv("公網 IP", wan.public_ip)}
+        ${kv("所在地", [wan.city, wan.country].filter(Boolean).join(", "))}
+        ${kv("NAT", natTxt)}${kv("電信級 NAT", nat.cgnat ? "疑似（沒有獨立公網 IP）" : "")}
+        ${kv("IPv6", wan.online ? (wan.ipv6 ? "可用" : "不可用") : "")}
+        ${kv("強制登入頁", wan.captive_portal ? "有（需先登入）" : "")}
+        ${hops ? `<div class="dg-hops">對外路徑：${hops}</div>` : ""}
+      </div>
+      <div class="dg-envbox"><h3>區域網路</h3>
+        ${kv("連線方式", lan.link)}${kv("本機 IP", lan.ip)}${kv("網段", lan.subnet)}
+        ${kv("閘道", lan.gateway ? `${lan.gateway}${lan.gateway_vendor ? `（${lan.gateway_vendor}）` : ""}` : "無")}
+        ${kv("DNS", (lan.dns || []).join("、"))}
+        ${kv("DHCP 伺服器", dhcp.server)}${kv("DHCP 租約", lease)}${kv("網域", dhcp.domain)}
+      </div>
+      ${notes ? `<div class="dg-envbox wide"><h3>網路環境判讀</h3>${notes}</div>` : ""}`;
+  }
+
+  // ── 設備盤點摘要（完整資料在「設備盤點」分頁）──────────────────────────────
+  function renderDevices() {
+    const sec = document.getElementById("dg-dev-section");
+    const lan = _data.lan;
+    if (!lan || !Array.isArray(lan.hosts)) { sec.classList.add("hidden"); return; }
+    sec.classList.remove("hidden");
+    document.getElementById("dg-dev-count").textContent = lan.alive_count ?? lan.hosts.length;
+    document.getElementById("dg-dev-types").innerHTML =
+      Object.entries(lan.summary || {}).sort((a, b) => b[1] - a[1])
+        .map(([t, c]) => `<span class="chip">${escHtml(t)} <b>${escHtml(c)}</b></span>`).join("");
+    // 掃描範圍的警告（例如用戶隔離）直接顯示在表格上方，避免誤以為設備只有這幾台
+    const scope = ((lan.assessment || {}).issues || []).find(i => i.category === "掃描範圍");
+    const note = document.getElementById("dg-dev-note");
+    note.classList.toggle("hidden", !scope);
+    if (scope) note.textContent = `${scope.title}。${scope.recommendation}`;
+    const sub = t => t ? `<div class="lan-sub">${t}</div>` : "";
+    document.getElementById("dg-dev-tbody").innerHTML = lan.hosts.map(h => `
+      <tr><td class="lan-name">${escHtml(h.name || "—")}${h.is_gateway ? ' <span class="lan-gw-dot" title="預設閘道">⚑</span>' : ""}</td>
+        <td>${escHtml(h.ip)}</td>
+        <td>${escHtml(h.vendor || "未知")}${sub(escHtml(h.mac || ""))}</td>
+        <td><span class="lan-type-badge${String(h.type).startsWith("本機") ? " self" : ""}">${escHtml(h.type || "不明")}</span></td>
+        <td class="lan-model">${escHtml(h.model || "—")}${sub(escHtml(h.os || (h.os_hint ? h.os_hint + "（推測）" : "")))}</td></tr>`).join("");
+  }
+  document.getElementById("dg-dev-more").addEventListener("click", e => {
+    e.preventDefault();
+    document.querySelector('.nav-item[data-tab="lan"]')?.click();
+  });
 
   // ── 頻道佔用長條圖（綠框 = 建議頻道）──────────────────────────────────────
   function drawChannelChart() {

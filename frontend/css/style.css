@@ -803,3 +803,81 @@ nav { padding: 6px 0; flex: 1; }
 /* 字型放大時：工具列放不下就換行，品牌名稱不斷行 */
 .we-toolbar { flex-wrap: wrap; row-gap: 6px; }
 .brand { white-space: nowrap; }
+
+/* ═══ 設備盤點：名稱 / 型號欄、展開詳情、類型篩選 ═══════════════════════════════ */
+.lan-table tbody tr[data-ip] { cursor: pointer; }
+.lan-table tbody tr[data-ip]:hover td { background: var(--bg-hover); }
+.lan-table td { vertical-align: top; }
+.lan-table td.lan-name { font-weight: 600; color: var(--text-1); white-space: normal; max-width: 220px; }
+.lan-table td.lan-model { white-space: normal; max-width: 230px; }
+.lan-sub { font-size: calc(12px * var(--fs, 1)); color: var(--text-3); font-weight: 400; margin-top: 1px; }
+.lan-caret { display: inline-block; width: 1em; color: var(--text-3); transition: transform .12s; }
+tr.open .lan-caret { transform: rotate(90deg); color: var(--accent); }
+.lan-typebar .chip { cursor: pointer; font-family: inherit; color: var(--text-2); }
+.lan-typebar .chip:hover { border-color: var(--accent); }
+.lan-typebar .chip.active { background: rgba(59,130,246,.18); border-color: var(--accent); color: var(--text-1); }
+.lan-typebar .chip.clear { color: var(--text-3); }
+.lan-info td { padding: 12px 16px 14px 30px; cursor: default; }
+.lan-dgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(300px * var(--fs, 1)), 1fr)); gap: 12px 22px; }
+.lan-dgroup h4 { font-size: calc(12px * var(--fs, 1)); color: var(--accent); font-weight: 700; letter-spacing: .3px;
+  margin: 0 0 5px; padding-bottom: 3px; border-bottom: 1px solid var(--border); }
+.lan-kv { display: flex; gap: 10px; font-size: calc(13px * var(--fs, 1)); line-height: 1.6; }
+.lan-kv span { flex: 0 0 calc(104px * var(--fs, 1)); color: var(--text-3); }
+.lan-kv b { font-weight: 500; color: var(--text-1); word-break: break-word; min-width: 0; user-select: text; }
+
+/* ═══ 現場診斷：網路環境總覽 ═══════════════════════════════════════════════════ */
+.dg-env { display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(320px * var(--fs, 1)), 1fr)); gap: 12px; margin: 0 20px 14px; }
+.dg-env:empty { display: none; }
+.dg-envbox { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; min-width: 0; }
+.dg-envbox h3 { font-size: calc(13px * var(--fs, 1)); font-weight: 700; color: var(--accent); margin: 0 0 8px; letter-spacing: .3px; }
+.dg-envbox .lan-kv span { flex-basis: calc(92px * var(--fs, 1)); }
+.dg-envbox.wide { grid-column: 1 / -1; }
+.dg-note { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-top: 1px solid var(--border); font-size: calc(13.5px * var(--fs, 1)); line-height: 1.55; }
+.dg-note:first-of-type { border-top: 0; }
+.dg-note .tag { flex: 0 0 auto; font-size: calc(11.5px * var(--fs, 1)); font-weight: 700; padding: 1px 7px; border-radius: 4px; margin-top: 2px; }
+.dg-note .tag.critical { background: rgba(239,68,68,.18); color: #fca5a5; }
+.dg-note .tag.warning  { background: rgba(234,179,8,.18);  color: #fde047; }
+.dg-note .tag.info     { background: rgba(59,130,246,.18); color: #93c5fd; }
+.dg-note .tag.good     { background: rgba(34,197,94,.16);  color: #86efac; }
+.dg-note b { color: var(--text-1); }
+.dg-note .rec { color: var(--text-2); }
+.dg-hops { font-size: calc(12.5px * var(--fs, 1)); color: var(--text-2); margin-top: 6px; line-height: 1.7; }
+.dg-hops code { background: var(--bg-base); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; color: var(--text-1); }
+.dg-more { float: right; font-size: calc(12.5px * var(--fs, 1)); color: var(--accent); text-decoration: none; font-weight: 500; }
+.dg-more:hover { text-decoration: underline; }
+.dg-dev-note { margin: 0 0 10px; padding: 8px 12px; border-left: 3px solid var(--warning); background: rgba(234,179,8,.07);
+  font-size: calc(13.5px * var(--fs, 1)); color: #fde68a; border-radius: 0 6px 6px 0; }
+.lan-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.lan-scroll > * { flex-shrink: 0; }
+
+/* 共用表格（設備盤點、流量排行、診斷頁的設備表）— 原本這個 class 沒有任何樣式 */
+.net-table { width: 100%; border-collapse: collapse; }
+.net-table th, .net-table td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+.net-table th { font-size: calc(12.5px * var(--fs, 1)); font-weight: 600; color: var(--text-2);
+  background: var(--bg-card); position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+.net-table .empty-row td { text-align: center; color: var(--text-3); padding: 22px 10px; white-space: normal; }
+.lan-table td.lan-name { min-width: calc(150px * var(--fs, 1)); }
+.lan-table td.lan-model { min-width: calc(170px * var(--fs, 1)); }
+
+/* 現場診斷：有結果後把大按鈕縮成一列，結果直接出現在第一屏 */
+.dg-hero.compact { flex-direction: row; justify-content: flex-start; padding: 10px 20px 12px; gap: 14px; }
+.dg-hero.compact .dg-bigbtn { width: auto; height: auto; border-radius: 8px; flex-direction: row; gap: 8px;
+  padding: 8px 16px; box-shadow: none; background: var(--accent); }
+.dg-hero.compact .dg-bigbtn:hover { transform: none; background: #2563eb; box-shadow: none; }
+.dg-hero.compact .dg-bigbtn svg { width: 18px; height: 18px; }
+.dg-hero.compact .dg-bigbtn-label { font-size: calc(14px * var(--fs, 1)); letter-spacing: 0; }
+.dg-hero.compact .dg-hint { text-align: left; font-size: calc(12.5px * var(--fs, 1)); }
+.dg-hero.compact .dg-hint:not(#dg-ai-provider) { display: none; }
+.dg-hero.compact #btn-dg-pdf { margin-left: auto; }
+
+/* 設備表要在 1280 寬的視窗內完整顯示：長欄位換行，不要橫向捲動 */
+.lan-table th, .lan-table td { padding: 7px 8px; }
+.lan-table td.lan-vendor { white-space: normal; max-width: calc(170px * var(--fs, 1)); }
+.lan-table td.lan-vendor .lan-sub { white-space: nowrap; }
+.lan-table td.lan-name { min-width: calc(130px * var(--fs, 1)); max-width: calc(190px * var(--fs, 1)); }
+.lan-table td.lan-model { min-width: calc(140px * var(--fs, 1)); max-width: calc(200px * var(--fs, 1)); }
+.lan-table td.svc { max-width: calc(200px * var(--fs, 1)); word-break: break-word; }
+.lan-act { flex-direction: column; gap: 3px; }
+.lan-act button { white-space: nowrap; }
+.lan-scroll > .status-line { margin: 0 20px 8px; }
+.lan-scroll > .lan-progress-wrap, .lan-scroll > .lan-typebar { margin-left: 20px; margin-right: 20px; }

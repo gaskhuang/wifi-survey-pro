@@ -263,16 +263,27 @@ const FeatureReport = (() => {
     },
 
     lan: {
-      kind: "lan", title: "有線 LAN 盤查報告", subtitle: "Wired LAN Inventory Report",
-      ready: () => (domTable("lan-tbody")?.rows.length || 0) > 0,
+      kind: "lan", title: "設備盤點報告", subtitle: "Network Device Inventory Report",
+      ready: () => typeof LAN !== "undefined" && (LAN.getResult()?.hosts || []).length > 0,
       build() {
-        const t = domTable("lan-tbody");
-        const secs = [kv("盤查摘要", cards("#lan-cards").filter(([k]) => k !== "掃描進度"))];
-        const tb = $("lan-typebar");
-        const types = tb ? [...tb.children].map(txt).filter(Boolean).join("、") || txt(tb) : "";
-        if (types) secs.push({ type: "text", title: "設備類型分布", paragraphs: [types] });
-        secs.push({ type: "table", title: "設備清單", columns: t.columns, rows: t.rows });
-        secs.push(reco("lan-reco", "LAN 優化建議"));
+        const r = LAN.getResult();
+        const hosts = r.hosts || [];
+        const named = hosts.filter(h => h.name || h.model).length;
+        const secs = [kv("盤點摘要", [
+          ["網段", r.subnet], ["閘道", r.gateway], ["存活設備", `${hosts.length} 台`],
+          ["已辨識名稱 / 型號", `${named} 台`],
+          ["類型分布", Object.entries(r.summary || {}).sort((a, b) => b[1] - a[1]).map(([t, c]) => `${t} ${c}`).join("、")],
+        ])];
+        secs.push({ type: "table", title: "設備清單",
+          columns: ["設備名稱", "IP", "MAC", "廠牌", "類型", "型號 / 系統"],
+          rows: hosts.map(h => [h.name || "—", h.ip, h.mac || "", h.vendor || "", h.type || "",
+                                [h.model, h.os].filter(Boolean).join(" / ") || "—"]) });
+        const svc = hosts.filter(h => (h.open_ports || []).length || (h.service_labels || []).length);
+        if (svc.length) secs.push({ type: "table", title: "服務與開放埠",
+          columns: ["設備", "IP", "宣告的服務", "開放的埠"],
+          rows: svc.map(h => [h.name || h.vendor || "—", h.ip, (h.service_labels || []).join("、"),
+                              (h.open_ports || []).map((p, i) => `${p}${(h.services || [])[i] ? "/" + h.services[i] : ""}`).join("、")]) });
+        secs.push(reco("lan-reco", "設備盤點發現與建議"));
         return secs;
       },
     },

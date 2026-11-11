@@ -28,6 +28,7 @@ import stability
 import speedtest_cf
 import ai_advisor
 import location_auth
+import net_env
 
 # When frozen by PyInstaller, resources live in sys._MEIPASS
 _BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -134,6 +135,12 @@ def api_scan():
         "needs_location": redacted > 0,
         "hidden_count": hidden,
     })
+
+
+# ─── 網路環境總覽（閘道 / DHCP / DNS / 公網 IP / ISP / NAT 層數）─────────────────
+@app.route("/api/env")
+def api_env():
+    return jsonify({"ok": True, **net_env.overview()})
 
 
 # ─── 定位服務授權（macOS 沒授權就遮蔽 SSID / BSSID）────────────────────────────
@@ -503,12 +510,14 @@ def api_iperf_stream():
 def api_diagnose_stream():
     """
     一鍵診斷完整管線（SSE）：
-    掃描 → 頻道分析 → 連線狀態 → Ping/DNS → 速度測試 → 穩定度 → AI 建議
+    Wi-Fi 掃描 → 頻道分析 → 連線狀態 → 網路環境 → 設備盤點 → Ping/DNS → 速度測試 → 穩定度 → AI 建議
     事件：step（進度）/ partial（各區結果）/ done（完整彙整）
     """
     duration = _num(request.args.get("duration"), 30, 10, 120)
     do_speed = request.args.get("speedtest", "1") == "1"
     do_ai    = request.args.get("ai", "1") == "1"
+    do_lan   = request.args.get("lan", "1") == "1"
+    lan_stop = threading.Event()
 
     def ev(etype, data):
         return f"event: {etype}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
@@ -517,7 +526,8 @@ def api_diagnose_stream():
         try:
             yield from _gen()
         finally:
-            # 客戶端斷線/重新整理：本次啟動的穩定度測試一併停止，否則會擋住下一次診斷
+            lan_stop.set()                  # 客戶端斷線/重新整理：設備盤點也一併停止
+            # 本次啟動的穩定度測試一併停止，否則會擋住下一次診斷
             if stab_flag.get("on"):
                 try:
                     if stability.TEST.status().get("running"):
@@ -546,6 +556,56 @@ def api_diagnose_stream():
         yield from run_step("analysis","頻道分析",
                             lambda: analyzer.analyze_channels(results.get("scan") or []))
         yield from run_step("current", "目前連線狀態",          scanner.current_connection)
+        # 網路環境：閘道 / DHCP / DNS / 公網 IP / ISP / NAT 層數
+        yield from run_step("env", "網路環境（閘道・DHCP・DNS・對外線路）", net_env.overview)
+
+        # 設備盤點：深度掃描目前所在網段（排在測速之前，避免測速占滿頻寬影響探測）
+        subnet = ((results.get("env") or {}).get("lan") or {}).get("subnet", "")
+        if do_lan and subnet:
+            label = f"設備盤點（{subnet}）"
+            sub_ok, sub_err = _validate_subnet(subnet)
+            if sub_err:
+                yield ev("step", {"key": "lan", "label": label, "status": "fail", "error": sub_err})
+            else:
+                yield ev("step", {"key": "lan", "label": label, "status": "running"})
+                holder: dict = {}
+
+                def _lan():
+                    try:
+                        holder["r"] = lan_scanner.scan(sub_ok, deep=True, should_stop=lan_stop.is_set)
+                    except Exception as e:
+                        holder["e"] = str(e)
+                with _ACTIVE_LOCK:                 # 與「設備盤點」分頁共用：同時只跑一個掃描
+                    prev = _ACTIVE_LAN["stop"]
+                    if prev is not None:
+                        prev.set()
+                    _ACTIVE_LAN["stop"] = lan_stop
+                t = threading.Thread(target=_lan, daemon=True)
+                t.start()
+                waited = 0
+                while t.is_alive() and waited < 120:
+                    time.sleep(1)
+                    waited += 1
+                    yield ev("progress", {"key": "lan", "elapsed": waited})
+                with _ACTIVE_LOCK:
+                    if _ACTIVE_LAN["stop"] is lan_stop:
+                        _ACTIVE_LAN["stop"] = None
+                r = holder.get("r")
+                if r and not r.get("cancelled"):
+                    global _LAST_LAN
+                    _LAST_LAN = r
+                    try:
+                        r["assessment"] = recommendations.assess_lan(r)
+                    except Exception:
+                        pass
+                    results["lan"] = r
+                    yield ev("step", {"key": "lan", "label": f"設備盤點（{r['alive_count']} 台）", "status": "ok"})
+                    yield ev("partial", {"key": "lan", "data": r})
+                else:
+                    lan_stop.set()
+                    yield ev("step", {"key": "lan", "label": label, "status": "fail",
+                                      "error": holder.get("e") or "掃描逾時"})
+
         yield from run_step("netperf", "Ping / DNS 延遲測試",
                             lambda: scanner.test_network_performance("8.8.8.8", "8.8.8.8", 5))
 
@@ -589,7 +649,8 @@ def api_diagnose_stream():
                     results.get("current") or {},
                     results.get("netperf") or {},
                     results.get("speedtest"),
-                    results.get("stability"))
+                    results.get("stability"),
+                    env=results.get("env"), lan=results.get("lan"))
             t = threading.Thread(target=_ai, daemon=True)
             t.start()
             waited = 0

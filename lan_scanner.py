@@ -49,6 +49,7 @@ def is_private_ipv4(s: str) -> bool:
         return False
 
 import platform_caps as caps
+import device_probe
 
 
 # ── 系統指令絕對路徑（打包 / GUI 啟動時 PATH 常缺 /usr/sbin，需絕對路徑）──────────
@@ -126,10 +127,13 @@ PORT_SERVICE = {
     5000: "UPnP/Synology", 5001: "Synology HTTPS", 5060: "SIP", 5357: "WSD",
     8006: "Proxmox", 8080: "HTTP-alt/QNAP", 8081: "QNAP", 8443: "HTTPS-alt",
     9100: "RAW 列印", 32400: "Plex",
+    1883: "MQTT", 5900: "VNC", 7000: "AirPlay", 8000: "HTTP-alt", 8009: "Google Cast",
+    8291: "MikroTik Winbox", 62078: "iPhone 同步",
 }
 # 掃描時實際探測的埠（取常見且能辨識設備類型者）
 SCAN_PORTS = [21, 22, 23, 53, 80, 139, 443, 445, 515, 548, 554, 631,
-              1433, 3306, 3389, 5000, 5001, 8006, 8080, 8081, 8443, 9100, 32400]
+              1433, 1883, 3306, 3389, 5000, 5001, 5900, 7000, 8000, 8006, 8009, 8080,
+              8081, 8291, 8443, 9100, 32400, 62078]
 
 # 廠牌關鍵字 → 設備類型傾向
 VENDOR_HINTS = [
@@ -163,6 +167,12 @@ def _type_from(vendor: str, ports: set, hostname: str, is_gateway: bool,
     # 印表機 / 掃描器：列印埠最明確
     if ports & {9100, 515, 631}:
         return ("印表機/掃描器", "high")
+    if 62078 in ports:                        # lockdownd：只有 iPhone / iPad 會開
+        return ("iPhone / iPad", "high")
+    if 8291 in ports:
+        return ("路由器/防火牆", "high")
+    if 8009 in ports and not ports & {445, 139, 3389}:
+        return ("電視/串流裝置", "medium")
     # NAS：
     #   · Synology 同時開 5000+5001 才算（避免 macOS 本機 5000 誤判）
     #   · QNAP 走 8080/8081 管理埠 + QNAP 廠牌
@@ -554,12 +564,13 @@ _ICMP_IDENT = itertools.count((os.getpid() * 7919) & 0xFFFF)
 
 
 def _icmp_sweep(ips, on_alive=None, should_stop=None, wait_s: float = 1.1,
-                retry_after: float = 0.45):
+                retry_after: float = 0.45, meta=None):
     """一次對所有 ips 送 ICMP echo，收集回覆。回傳存活 IP 集合；建立 socket 失敗回 None
     （呼叫端退回子程序 sweep）。送出 ICMP 同樣會觸發 ARP，既有 ARP 發現機制不受影響。
       · macOS 收到的資料含 IP 標頭（首 nibble==4 時去掉 IHL*4），Linux 不含
       · Linux 核心會把 identifier 改成 socket 的本地「埠」，兩者都接受
-      · retry_after 秒後對尚未回應者補送一輪（降低 Wi-Fi 單包遺失造成的漏掃）"""
+      · retry_after 秒後對尚未回應者補送一輪（降低 Wi-Fi 單包遺失造成的漏掃）
+      · meta（dict）：填入 ip → {"rtt_ms", "ttl"}；TTL 只有含 IP 標頭的平台（macOS）拿得到"""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
     except (OSError, AttributeError):
@@ -574,6 +585,7 @@ def _icmp_sweep(ips, on_alive=None, should_stop=None, wait_s: float = 1.1,
         idents = {ident}
         index = {ip: i for i, ip in enumerate(ips)}
         alive = set()
+        sent_at = {}
         payload = b"NetInspectPro..."
 
         def _stopped():
@@ -587,7 +599,9 @@ def _icmp_sweep(ips, on_alive=None, should_stop=None, wait_s: float = 1.1,
                     return
                 except OSError:
                     return
+                ttl = None
                 if data and (data[0] >> 4) == 4:              # macOS：含 IP 標頭
+                    ttl = data[8] if len(data) > 8 else None
                     data = data[(data[0] & 0x0F) * 4:]
                 if len(data) < 8:
                     continue
@@ -598,6 +612,10 @@ def _icmp_sweep(ips, on_alive=None, should_stop=None, wait_s: float = 1.1,
                 if index.get(src) != seq:                     # 序號與來源位址須對應
                     continue
                 alive.add(src)
+                if meta is not None:
+                    t0 = sent_at.get(src)
+                    meta[src] = {"rtt_ms": round((time.time() - t0) * 1000, 1) if t0 else None,
+                                 "ttl": ttl}
                 if on_alive:
                     on_alive(src)
 
@@ -607,6 +625,7 @@ def _icmp_sweep(ips, on_alive=None, should_stop=None, wait_s: float = 1.1,
             pkt = struct.pack("!BBHHH", 8, 0, _icmp_checksum(hdr + payload), ident, seq) + payload
             for _ in range(3):
                 try:
+                    sent_at[ip] = time.time()
                     s.sendto(pkt, (ip, 0))
                     return
                 except BlockingIOError:
@@ -654,6 +673,30 @@ def _icmp_sweep(ips, on_alive=None, should_stop=None, wait_s: float = 1.1,
         return alive
     finally:
         s.close()
+
+
+def _is_random_mac(mac: str) -> bool:
+    """本機管理位元（第一個位元組的 0x02）＝隨機 / 私人 Wi-Fi 位址，查不到廠牌是正常的。"""
+    try:
+        return bool(mac) and bool(int(mac.split(":")[0], 16) & 0x02)
+    except (ValueError, IndexError):
+        return False
+
+
+def _self_info() -> dict:
+    """執行 App 的這台 Mac：名稱、機型、系統版本。"""
+    out = {}
+    try:
+        out["name"] = _run_out(["/usr/sbin/scutil", "--get", "ComputerName"], 2).strip()
+        code = _run_out(["/usr/sbin/sysctl", "-n", "hw.model"], 2).strip()
+        am = device_probe._apple_model(code)
+        out["model"] = am[0] if am else code
+        import platform
+        ver = platform.mac_ver()[0]
+        out["os"] = f"macOS {ver}" if ver else ""
+    except Exception:
+        pass
+    return out
 
 
 # ── 主掃描流程 ───────────────────────────────────────────────────────────────────
@@ -723,6 +766,7 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
 
     # 1) ping sweep（同時觸發 ARP 解析）— 每探到一台就即時回報（邊掃邊顯示）
     alive = set()
+    ping_meta = {}              # ip → {"rtt_ms", "ttl"}
     ips = [str(ip) for ip in hosts_iter]
     prog_lock = threading.Lock()
     state = {"done": 0}
@@ -764,7 +808,7 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
     tk = threading.Thread(target=_ticker, daemon=True)
     tk.start()
     try:
-        swept = _icmp_sweep(ips, on_alive=_on_alive, should_stop=should_stop)
+        swept = _icmp_sweep(ips, on_alive=_on_alive, should_stop=should_stop, meta=ping_meta)
     finally:
         ticker_stop.set()
         tk.join()
@@ -827,34 +871,76 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
                          should_stop, _on_port):
             return _partial([])
 
+    # 3c) 設備辨識：mDNS / NetBIOS / UPnP / SNMP / 網頁與 SSH 橫幅（問設備自己的名稱、型號、系統）
+    probes = {}
+    if deep and plist:
+        if progress:
+            progress(total, total, {"_phase": "identify", "count": len(plist)})
+        try:
+            probes = device_probe.discover(plist, ports_by_ip, should_stop)
+        except Exception:
+            probes = {}
+        if _cancelled():
+            return _partial([])
+
     names = _hostnames(plist, rdns_deadline, should_stop, rdns_events)
     if _cancelled():
         return _partial([])
+    self_info = _self_info() if self_ip in present else {}
 
     def _fingerprint(ip):
         mac = arp.get(ip) or _arp_lookup(ip)      # 整份快照優先，缺則逐台查
-        vendor = _vendor(mac)
+        random_mac = _is_random_mac(mac)
+        vendor = "" if random_mac else _vendor(mac)
         hostname = names.get(ip, "")
         ports = ports_by_ip.get(ip, set())        # 埠已於 3b 集中掃完
-        dtype, conf = _type_from(vendor, ports, hostname, ip == gateway,
-                                 is_self=(ip == self_ip))
+        is_self = ip == self_ip
+        dtype, conf = _type_from(vendor, ports, hostname, ip == gateway, is_self=is_self)
         sources = ["ping"] if ip in alive else []
         if mac:
             sources.append("arp")
         if ports:
             sources.append("port")
-        return {
-            "ip": ip, "mac": mac, "vendor": vendor or "未知",
+        pm = ping_meta.get(ip) or {}
+        h = {
+            "ip": ip, "mac": mac,
+            "vendor": "隨機 MAC（私人 Wi-Fi 位址）" if random_mac else (vendor or "未知"),
+            "mac_random": random_mac,
             "type": dtype, "hostname": hostname,
+            "name": "", "model": "", "os": "",
             "open_ports": sorted(ports),
             "services": [PORT_SERVICE.get(p, str(p)) for p in sorted(ports)],
-            "is_gateway": ip == gateway,
+            "is_gateway": ip == gateway, "is_self": is_self,
             "ping_ok": ip in alive,
+            "rtt_ms": pm.get("rtt_ms"), "ttl": pm.get("ttl"),
             "confidence": {"vendor": "high" if vendor else "low",
                            "type": conf,
                            "model": "low"},
             "sources": sources,
         }
+        # 設備自己回報的資料（名稱 / 型號 / 系統）；類型只在證據更可靠時覆蓋
+        ident = device_probe.identify(h, probes.get(ip))
+        new_t, new_c = ident.pop("type", None), ident.pop("type_conf", None)
+        h.update(ident)
+        if new_t and not is_self:
+            rank = {"low": 0, "medium": 1, "high": 2}
+            weak = dtype in ("不明", "網頁設備 / IoT", "Apple 裝置（Mac/iPhone）", "手機/IoT", "PC / Windows")
+            if rank[new_c] > rank.get(conf, 0) or (rank[new_c] == rank.get(conf, 0) and weak):
+                h["type"], h["confidence"]["type"] = new_t, new_c
+        if h.get("model"):
+            h["confidence"]["model"] = "high"
+        if is_self:                                 # 本機資料直接問系統，比網路探測準
+            for k, v in self_info.items():
+                if v:
+                    h[k] = v
+        if h["type"] == "不明" and random_mac:      # 隨機 MAC 幾乎都是手機 / 平板 / 筆電的隱私位址
+            h["type"], h["confidence"]["type"] = "手機 / 平板（隨機 MAC）", "low"
+        if not h["name"]:
+            h["name"] = re.sub(r"\.(local|lan|home|localdomain)\.?$", "", hostname, flags=re.I)
+        for src, key in (("mdns", "mdns"), ("netbios", "netbios"), ("upnp", "upnp"), ("snmp", "snmp")):
+            if (h.get("details") or {}).get(key):
+                sources.append(src)
+        return h
 
     if progress and plist:
         progress(total, total, {"_phase": "fingerprint", "count": len(plist)})
@@ -893,17 +979,28 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
 
 
 # ── 匯出 ─────────────────────────────────────────────────────────────────────────
+def _csv_safe(v):
+    """設備名稱是對方自己取的：開頭是 = + - @ 時加上單引號，避免試算表當成公式執行。"""
+    s = "" if v is None else str(v)
+    return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+
+
 def to_csv(result: dict) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["IP", "MAC", "廠牌", "設備類型", "主機名", "開放埠",
-                "是否閘道", "PING", "來源"])
+    w.writerow(["IP", "名稱", "MAC", "廠牌", "設備類型", "型號", "作業系統", "主機名",
+                "開放埠", "服務", "工作群組", "序號", "延遲(ms)", "是否閘道", "PING", "資料來源"])
     for h in result.get("hosts", []):
-        w.writerow([h["ip"], h["mac"], h["vendor"], h["type"], h["hostname"],
-                    " ".join(str(p) for p in h["open_ports"]),
-                    "是" if h["is_gateway"] else "",
-                    "OK" if h["ping_ok"] else "",
-                    "+".join(h["sources"])])
+        w.writerow([_csv_safe(x) for x in (
+            h["ip"], h.get("name", ""), h["mac"], h["vendor"], h["type"], h.get("model", ""),
+            h.get("os") or h.get("os_hint", ""), h["hostname"],
+            " ".join(str(p) for p in h["open_ports"]),
+            " / ".join(h.get("service_labels") or []),
+            h.get("workgroup", ""), h.get("serial", ""),
+            h.get("rtt_ms") if h.get("rtt_ms") is not None else "",
+            "是" if h["is_gateway"] else "",
+            "OK" if h["ping_ok"] else "",
+            "+".join(h["sources"]))])
     return buf.getvalue()
 
 

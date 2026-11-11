@@ -53,7 +53,7 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
-_PROMPT = """你是資深 Wi-Fi 無線網路顧問，在幫一位「經驗不足的年輕 IT 工程師」看現場診斷數據。
+_PROMPT = """你是資深網路顧問（Wi-Fi、區域網路、對外線路都要看），在幫一位「經驗不足的年輕 IT 工程師」看現場診斷數據。
 他現在人在客戶現場，需要馬上知道下一步該做什麼。
 
 以下是他筆電量到的完整診斷資料（JSON）。請分析並輸出行動建議。
@@ -66,15 +66,46 @@ _PROMPT = """你是資深 Wi-Fi 無線網路顧問，在幫一位「經驗不足
 5. 重要：要做「跨指標推理」——例如訊號很強但延遲抖動大，要指出可能是 AP 過載或省電模式，而不是叫他改善訊號
 6. ok 項目至少列 2 條（讓工程師知道哪些不用動），總項目 5-10 條
 7. 若資料中某區塊缺失（null），跳過即可，不要編造
+8. network_environment（雙重 NAT、DHCP、DNS、對外線路）與 lan_devices（設備盤點發現的風險）裡的 findings 也要納入，
+   並說明它們和 Wi-Fi 症狀之間可能的關聯
 
 診斷資料：
 """
 
 
 # ── Payload builder ──────────────────────────────────────────────────────────
+def _env_brief(env: dict | None) -> dict | None:
+    """網路環境摘要。不含公網 IP、MAC、設備名稱等可識別資料（這份資料可能送到雲端模型）。"""
+    if not env:
+        return None
+    lan, wan = env.get("lan") or {}, env.get("wan") or {}
+    nat = wan.get("nat") or {}
+    return {
+        "link": lan.get("link"), "gateway_vendor": lan.get("gateway_vendor") or None,
+        "dns_server_count": len(lan.get("dns") or []),
+        "dhcp_lease_minutes": ((lan.get("dhcp") or {}).get("lease_sec") or 0) // 60 or None,
+        "internet_reachable": wan.get("online"), "isp": wan.get("isp") or None,
+        "ipv6": wan.get("ipv6"), "captive_portal": wan.get("captive_portal"),
+        "double_nat": nat.get("double_nat"), "carrier_grade_nat_suspected": nat.get("cgnat"),
+        "findings": [i["title"] for i in env.get("issues") or [] if i.get("severity") != "good"] or None,
+    }
+
+
+def _lan_brief(lan: dict | None) -> dict | None:
+    if not lan:
+        return None
+    a = lan.get("assessment") or {}
+    return {
+        "device_count": lan.get("alive_count"), "by_type": lan.get("summary"),
+        "findings": [i["title"] for i in a.get("issues") or []
+                     if i.get("severity") in ("critical", "warning")] or None,
+    }
+
+
 def build_payload(networks: list, analysis: dict, current: dict,
                   netperf: dict, speedtest: dict | None,
-                  stability_result: dict | None) -> dict:
+                  stability_result: dict | None,
+                  env: dict | None = None, lan: dict | None = None) -> dict:
     """把各模組結果壓縮成 < 4KB 的精簡 JSON，省 token 也降雜訊。"""
 
     # 環境概況：各頻段 AP 數 + 每頻道佔用 top5
@@ -144,6 +175,10 @@ def build_payload(networks: list, analysis: dict, current: dict,
             "roam_count":       r.get("roam_count"),
             "disconnect_count": r.get("disconnect_count"),
         }
+    if env:
+        payload["network_environment"] = _env_brief(env)
+    if lan:
+        payload["lan_devices"] = _lan_brief(lan)
     return payload
 
 
@@ -315,11 +350,16 @@ def codex_text(prompt: str, timeout: float = CODEX_TIMEOUT) -> str:
 _SEV_TO_PRIORITY = {"critical": "immediate", "warning": "adjust",
                     "info": "adjust", "good": "ok"}
 
-def _rules_analyze(networks, analysis, current, netperf) -> dict:
+def _rules_analyze(networks, analysis, current, netperf, env=None, lan=None) -> dict:
     assessment = recommender.full_assessment(
         networks, analysis, current, netperf, [])
+    issues = list(assessment.get("issues", []))
+    # 網路環境（雙重 NAT、DHCP…）與設備盤點發現的風險也列入行動清單
+    issues += [i for i in (env or {}).get("issues") or [] if i.get("severity") != "good"]
+    issues += [i for i in ((lan or {}).get("assessment") or {}).get("issues") or []
+               if i.get("severity") in ("critical", "warning")]
     items = []
-    for issue in assessment.get("issues", []):
+    for issue in issues:
         items.append({
             "priority": _SEV_TO_PRIORITY.get(issue.get("severity"), "adjust"),
             "problem":  issue.get("title", "") +
@@ -339,10 +379,11 @@ def _rules_analyze(networks, analysis, current, netperf) -> dict:
 # ── Public API ───────────────────────────────────────────────────────────────
 def analyze(networks: list, analysis: dict, current: dict, netperf: dict,
             speedtest: dict | None = None,
-            stability_result: dict | None = None) -> dict:
+            stability_result: dict | None = None,
+            env: dict | None = None, lan: dict | None = None) -> dict:
     """回傳 {ok, provider, summary, score, items}。永不拋例外。"""
     payload = build_payload(networks, analysis, current, netperf,
-                            speedtest, stability_result)
+                            speedtest, stability_result, env, lan)
 
     provider = current_engine()
     result = None
@@ -352,7 +393,7 @@ def analyze(networks: list, analysis: dict, current: dict, netperf: dict,
         result = _api_analyze(provider, payload)
     if result is None:
         try:
-            result = _rules_analyze(networks, analysis, current, netperf)
+            result = _rules_analyze(networks, analysis, current, netperf, env, lan)
             provider = "rules"
         except Exception as e:
             return {"ok": False, "provider": "none", "error": str(e),

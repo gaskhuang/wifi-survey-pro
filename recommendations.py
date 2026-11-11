@@ -238,7 +238,30 @@ def assess_lan(scan: dict) -> dict:
     nas      = [h for h in hosts if h.get("type") == "NAS"]
     unknown_type = [h for h in hosts if h.get("type") == "不明"]
     no_vendor    = [h for h in hosts if h.get("vendor") in ("", "未知")]
+    random_mac   = [h for h in hosts if h.get("mac_random") and not h.get("is_self")]
     gateway      = [h for h in hosts if h.get("is_gateway")]
+    snmp_public  = [h for h in hosts if (h.get("details") or {}).get("snmp")]
+    upnp_igd     = [h for h in hosts if ((h.get("details") or {}).get("upnp") or {}).get("igd")]
+    cameras      = [h for h in hosts if h.get("type") == "IP 攝影機"]
+    vnc          = [h for h in hosts if has(h, 5900)]
+    others       = [h for h in hosts if not h.get("is_self") and not h.get("is_gateway")]
+
+    def label(lst, k=5):
+        """清單用「名稱（IP）」呈現，沒名稱才只列 IP。"""
+        s = "、".join(f"{h['name']}（{h['ip']}）" if h.get("name") else h["ip"] for h in lst[:k])
+        return s + ("…" if len(lst) > k else "")
+
+    # ── 掃描本身是否可信 ──
+    if hosts and not others and (scan or {}).get("total", 0) >= 16:
+        issues.append({
+            "severity": "warning", "category": "掃描範圍", "icon": "🚧",
+            "title": "只看到閘道和本機，這個網路可能開了用戶隔離",
+            "problem": "整個網段沒有其他設備回應。訪客 Wi-Fi 或開啟 AP 隔離（Client Isolation）的網路，"
+                       "設備之間互相看不到，掃描結果不代表客戶實際的設備數量。",
+            "recommendation": "改接客戶的內部網路（員工用 Wi-Fi 或有線）再掃一次；"
+                              "如果這就是內部網路，檢查 AP / 交換器是否誤開了用戶隔離或 Port Isolation。",
+            "value": 0,
+        })
 
     # ── 安全風險 ──
     if telnet:
@@ -264,6 +287,38 @@ def assess_lan(scan: dict) -> dict:
             "problem": f"RDP 常為勒索軟體入侵點：{ips(rdp)}",
             "recommendation": "限制來源 IP、啟用 NLA 與強密碼/MFA；對外務必經 VPN。",
             "value": len(rdp),
+        })
+    if snmp_public:
+        issues.append({
+            "severity": "warning", "category": "SNMP", "icon": "🔑",
+            "title": f"{len(snmp_public)} 台設備用預設的 SNMP community「public」",
+            "problem": f"任何人都能讀取這些設備的系統資訊：{label(snmp_public)}",
+            "recommendation": "改掉預設的 community 字串或改用 SNMPv3；不需要監控的設備直接關閉 SNMP。",
+            "value": len(snmp_public),
+        })
+    if vnc:
+        issues.append({
+            "severity": "warning", "category": "遠端桌面", "icon": "🖥️",
+            "title": f"{len(vnc)} 台開放 VNC / 螢幕共享（5900）",
+            "problem": f"VNC 密碼強度有限、部分版本未加密：{label(vnc)}",
+            "recommendation": "不需要時關閉螢幕共享；需要時限制來源 IP，對外一律經 VPN。",
+            "value": len(vnc),
+        })
+    if upnp_igd:
+        issues.append({
+            "severity": "info", "category": "UPnP", "icon": "🔀",
+            "title": "路由器開啟了 UPnP",
+            "problem": f"內網任何設備都能要求路由器自動開對外連接埠：{label(upnp_igd)}",
+            "recommendation": "辦公環境建議關閉 UPnP，需要對外的服務改用手動連接埠轉送。",
+            "value": len(upnp_igd),
+        })
+    if cameras:
+        issues.append({
+            "severity": "info", "category": "資產盤點", "icon": "📷",
+            "title": f"偵測到 {len(cameras)} 台 IP 攝影機 / 錄影主機",
+            "problem": f"{label(cameras)}",
+            "recommendation": "確認已改掉預設密碼、韌體為最新，並放在獨立的 VLAN，不要直接對外開放。",
+            "value": len(cameras),
         })
     if web_nas:
         issues.append({
@@ -295,9 +350,17 @@ def assess_lan(scan: dict) -> dict:
         issues.append({
             "severity": "info", "category": "未知設備", "icon": "❔",
             "title": f"{len(no_vendor)} 台無法辨識廠牌",
-            "problem": "MAC 無對應 OUI，多為啟用隨機化 MAC 的行動裝置，或非標準設備。",
+            "problem": f"MAC 查不到對應廠商，可能是非標準設備：{label(no_vendor)}",
             "recommendation": "逐台核對是否為公司資產；非預期設備應查明是否為未授權接入。",
             "value": len(no_vendor),
+        })
+    if random_mac:
+        issues.append({
+            "severity": "info", "category": "行動裝置", "icon": "📱",
+            "title": f"{len(random_mac)} 台使用隨機 MAC（私人 Wi-Fi 位址）",
+            "problem": f"手機、平板、筆電預設會對每個 Wi-Fi 使用隨機 MAC，無法從 MAC 判斷廠牌：{label(random_mac)}",
+            "recommendation": "若客戶用 MAC 白名單或 DHCP 固定配發，需請使用者對這個 Wi-Fi 關閉「私人 Wi-Fi 位址」。",
+            "value": len(random_mac),
         })
     if unknown_type:
         issues.append({

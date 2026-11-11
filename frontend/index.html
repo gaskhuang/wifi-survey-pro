@@ -54,7 +54,7 @@
         <svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>iperf3
       </a>
       <a href="#" class="nav-item" data-tab="lan">
-        <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>有線 LAN
+        <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>設備盤點
       </a>
       <a href="#" class="nav-item" data-tab="traffic">
         <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-4 4 3 5-7"/></svg>流量監測
@@ -119,9 +119,13 @@
             <span class="dg-bigbtn-label">開始診斷</span>
           </button>
           <div class="dg-hint">
-            一鍵完成：環境掃描 → 頻道分析 → Ping 測試 → 速度測試 → 穩定度測試 → AI 建議行動
+            一鍵看完整個網路：Wi-Fi 環境 → 對外線路與 NAT → 閘道・DHCP・DNS → 所有設備盤點 → 測速與穩定度 → AI 建議行動
           </div>
           <div class="dg-hint" id="dg-ai-provider" style="margin-top:4px;font-size: calc(12px * var(--fs, 1))"></div>
+          <button class="btn btn-primary hidden" id="btn-dg-pdf">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/></svg>
+            匯出 PDF 報告
+          </button>
         </div>
 
         <!-- 進度 -->
@@ -132,16 +136,27 @@
 
         <!-- 結果 -->
         <div id="dg-result" class="hidden">
-          <div style="display:flex;justify-content:flex-end;padding:0 20px 10px">
-            <button class="btn btn-primary" id="btn-dg-pdf">
-              <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/></svg>
-              匯出 PDF 報告
-            </button>
-          </div>
           <div class="cards-row" id="dg-cards"></div>
 
+          <!-- 網路環境：對外線路 / 區域網路 / 注意事項 -->
+          <div class="dg-env" id="dg-env"></div>
+
+          <!-- 設備盤點 -->
+          <div class="chart-section hidden" id="dg-dev-section" style="padding-bottom:4px">
+            <div class="section-title">設備盤點 <span id="dg-dev-count" class="badge">0</span>
+              <a href="#" id="dg-dev-more" class="dg-more">查看完整資料（可展開每台設備）→</a></div>
+            <div id="dg-dev-note" class="dg-dev-note hidden"></div>
+            <div id="dg-dev-types" class="lan-typebar" style="pointer-events:none"></div>
+            <div class="table-wrap" style="max-height:340px;overflow:auto">
+              <table class="net-table lan-table">
+                <thead><tr><th>設備名稱</th><th>IP</th><th>廠牌</th><th>類型</th><th>型號 / 系統</th></tr></thead>
+                <tbody id="dg-dev-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
           <div class="chart-section" style="padding-bottom:4px">
-            <div class="section-title">頻道佔用一覽（<span style="color:#22c55e">綠框 = 建議的乾淨頻道</span>）</div>
+            <div class="section-title"><span>頻道佔用一覽（<b style="color:#22c55e;font-weight:600">綠框 = 建議的乾淨頻道</b>）</span></div>
             <div style="height:150px;position:relative"><canvas id="dg-chchart"></canvas></div>
           </div>
 
@@ -736,14 +751,15 @@
 
     </div>
 
-    <!-- ═══ TAB: 有線 LAN 盤查 ═══════════════════════════════════════════════ -->
+    <!-- ═══ TAB: 設備盤點 ═══════════════════════════════════════════════ -->
     <div class="tab-pane" id="tab-lan">
       <div class="tab-header">
-        <h1>有線 LAN 盤查</h1>
+        <h1>設備盤點</h1>
         <div class="actions">
           <input type="text" id="lan-cidr" class="select-input" style="width:150px"
                  placeholder="192.168.1.0/24" title="要掃描的網段 CIDR">
-          <label class="lan-check"><input type="checkbox" id="lan-deep" checked> 深度指紋</label>
+          <input type="text" id="lan-search" class="select-input" style="width:170px" placeholder="搜尋名稱 / IP / 廠牌…" autocomplete="off" spellcheck="false">
+          <label class="lan-check" title="除了 ping 與埠掃描，再用 mDNS、NetBIOS、UPnP、SNMP 詢問設備的名稱、型號與系統"><input type="checkbox" id="lan-deep" checked> 深度辨識</label>
           <button class="btn btn-primary" id="btn-lan-scan">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>開始掃描
           </button>
@@ -752,6 +768,7 @@
         </div>
       </div>
 
+      <div class="lan-scroll">
       <div id="lan-status" class="status-line hidden"></div>
       <div id="lan-progress-wrap" class="lan-progress-wrap hidden">
         <div id="lan-progress-bar" class="lan-progress-bar"></div>
@@ -759,6 +776,7 @@
 
       <div class="cards-row" id="lan-cards">
         <div class="card"><div class="card-label">存活設備</div><div class="card-val" id="lan-count">—</div></div>
+        <div class="card"><div class="card-label">已辨識名稱 / 型號</div><div class="card-val" id="lan-named">—</div></div>
         <div class="card"><div class="card-label">閘道</div><div class="card-val" id="lan-gw" style="font-size: calc(18px * var(--fs, 1))">—</div></div>
         <div class="card"><div class="card-label">網段</div><div class="card-val" id="lan-subnet" style="font-size: calc(17px * var(--fs, 1))">—</div></div>
         <div class="card"><div class="card-label">掃描進度</div><div class="card-val" id="lan-scanned">—</div></div>
@@ -766,22 +784,23 @@
 
       <div id="lan-typebar" class="lan-typebar"></div>
 
-      <div class="chart-section" style="flex:1;min-height:0;display:flex;flex-direction:column">
+      <div class="chart-section">
         <div class="section-title">設備清單 <span id="lan-live-hint" class="muted" style="font-size: calc(13px * var(--fs, 1))"></span></div>
-        <div class="table-wrap" style="flex:1;overflow:auto">
+        <div class="table-wrap" style="overflow-x:auto">
           <table class="net-table lan-table">
             <thead><tr>
-              <th>IP</th><th>MAC</th><th>廠牌</th><th>類型</th><th>主機名</th>
-              <th>開放埠 / 服務</th><th>動作</th>
+              <th>設備名稱</th><th>IP</th><th>廠牌 / MAC</th><th>類型</th><th>型號 / 系統</th>
+              <th>服務 / 開放埠</th><th>動作</th>
             </tr></thead>
             <tbody id="lan-tbody">
-              <tr class="empty-row"><td colspan="7">尚未掃描 — 點「開始掃描」盤點內網設備</td></tr>
+              <tr class="empty-row"><td colspan="7">尚未掃描 — 點「開始掃描」盤點這個網段的所有設備（點任一列可看完整資料）</td></tr>
             </tbody>
           </table>
         </div>
       </div>
 
       <div class="reco-panel" id="lan-reco" hidden></div>
+      </div>
     </div>
 
     <!-- ═══ TAB: AI 診斷 ══════════════════════════════════════════════════════ -->

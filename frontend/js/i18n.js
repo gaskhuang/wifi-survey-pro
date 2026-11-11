@@ -12,12 +12,12 @@ const I18N = (() => {
     // 導覽
     "現場診斷": "Field Diagnosis", "掃描": "Scan", "頻道分析": "Channels",
     "頻譜分析儀": "Spectrum", "穩定度分析": "Stability", "覆蓋熱圖": "Heatmap",
-    "即時監控": "Live Monitor", "網路效能": "Performance", "有線 LAN": "Wired LAN",
+    "即時監控": "Live Monitor", "網路效能": "Performance", "設備盤點": "Devices",
     "流量監測": "Traffic", "AI 診斷": "AI Diagnostics", "報告": "Report", "設定": "Settings",
     // 分頁標題
     "連線穩定度分析": "Connection Stability", "即時訊號監控": "Live Signal Monitor",
     "網路效能測試": "Network Performance Test", "iperf3 吞吐量測試": "iperf3 Throughput Test",
-    "有線 LAN 盤查": "Wired LAN Inventory", "流量異常監測": "Traffic Anomaly Monitor",
+    "設備盤點": "Device Inventory", "流量異常監測": "Traffic Anomaly Monitor",
     "勘測報告": "Survey Report",
     // 常見區塊標題 / 按鈕
     "優化建議": "Optimization Advice", "優化建議方案": "Optimization Plan",

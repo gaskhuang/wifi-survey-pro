@@ -505,8 +505,8 @@ def _build_diagnosis_pdf(data, site_info):
     GLAB = st("Glab", 13, color=gcol, align=TA_CENTER, space_after=12)
 
     story = [
-        Paragraph("Wi-Fi 現場診斷報告", H1),
-        Paragraph("Wi-Fi Field Diagnosis Report", H1s),
+        Paragraph("網路現場診斷報告", H1),
+        Paragraph("Network Field Diagnosis Report", H1s),
         HRFlowable(width="100%", thickness=2, color=BLUE),
         Spacer(1, 0.5*cm),
     ]
@@ -576,8 +576,84 @@ def _build_diagnosis_pdf(data, site_info):
         story.append(Paragraph("（無頻道分析資料）", SMAL))
     story.append(Spacer(1, 0.5*cm))
 
-    # ── 五、AI 建議行動 ──
-    story.append(Paragraph("五、建議行動方案", H2))
+    # ── 網路環境（對外線路 / 區域網路 / 判讀）──
+    num = iter("五六七八九")
+    env = data.get("env") or {}
+    if env:
+        lan_e, wan_e = env.get("lan") or {}, env.get("wan") or {}
+        nat = wan_e.get("nat") or {}
+        dhcp = lan_e.get("dhcp") or {}
+        lease = dhcp.get("lease_sec")
+        lease_txt = (f"{lease / 3600:.1f} 小時" if lease and lease >= 3600 else
+                     f"{lease // 60} 分鐘" if lease else "—")
+        path = " → ".join(f"{h['ip']}（{h['kind']}）" for h in (nat.get("hops") or []) if h.get("ip")) or "—"
+        gw_txt = lan_e.get("gateway") or "無"
+        if lan_e.get("gateway_vendor"):
+            gw_txt += f"（{lan_e['gateway_vendor']}）"
+        rows = [
+            ["對外連線", "已連上網際網路" if wan_e.get("online") else "無法連上網際網路"],
+            ["ISP / 公網 IP", f"{wan_e.get('isp') or '—'} / {wan_e.get('public_ip') or '—'}"],
+            ["NAT", ("雙重 NAT（" + " → ".join(nat.get("routers") or []) + "）") if nat.get("double_nat")
+                    else ("單層 NAT" if nat.get("private_hops") else "—")],
+            ["對外路徑", path],
+            ["連線方式 / 本機 IP", f"{lan_e.get('link') or '—'} / {lan_e.get('ip') or '—'}（{lan_e.get('subnet') or '—'}）"],
+            ["閘道", gw_txt],
+            ["DNS", "、".join(lan_e.get("dns") or []) or "—"],
+            ["DHCP 伺服器 / 租約", f"{dhcp.get('server') or '—'} / {lease_txt}"],
+        ]
+        CELL = st("EnvCell", 9, space_after=0)
+        story += [Paragraph(f"{next(num)}、網路環境", H2),
+                  _kv_table([[k, Paragraph(_t(v), CELL)] for k, v in rows], FONT), Spacer(1, 0.2*cm)]
+        for i in env.get("issues") or []:
+            lbl, col = _SEV_META.get(i.get("severity"), ("", "#000000"))
+            story.append(Paragraph(f"<font color='{col}'>【{lbl}】{_t(i.get('title'))}</font>"
+                                   + (f"　{_t(i.get('problem'))}" if i.get("problem") else ""), BODY))
+            if i.get("recommendation"):
+                story.append(Paragraph(f"　→ {_t(i['recommendation'])}", SMAL))
+        story.append(Spacer(1, 0.5*cm))
+
+    # ── 設備盤點 ──
+    lan = data.get("lan") or {}
+    hosts = [h for h in (lan.get("hosts") or []) if isinstance(h, dict)]
+    if hosts:
+        from reportlab.platypus import Table, TableStyle
+        summ = "、".join(f"{t} {c}" for t, c in (lan.get("summary") or {}).items())
+        story.append(Paragraph(f"{next(num)}、設備盤點（{len(hosts)} 台）", H2))
+        story.append(Paragraph(f"　網段 {_t(lan.get('subnet', ''))}：{_t(summ)}", SMAL))
+        scope = next((i for i in (lan.get("assessment") or {}).get("issues") or []
+                      if i.get("category") == "掃描範圍"), None)
+        if scope:
+            story.append(Paragraph(f"<font color='#ca8a04'>【注意】{_t(scope.get('title'))}</font>　"
+                                   f"{_t(scope.get('recommendation'))}", BODY))
+        cols = ["設備名稱", "IP", "MAC", "廠牌", "類型", "型號 / 系統"]
+        rows = []
+        for h in hosts[:_FR_MAX_ROWS]:
+            ms = " / ".join(x for x in (h.get("model"), h.get("os")) if x)
+            rows.append([str(h.get("name") or "—")[:60], str(h.get("ip") or ""), str(h.get("mac") or ""),
+                         str(h.get("vendor") or "")[:40], str(h.get("type") or ""), ms[:90] or "—"])
+        HC = st("DevHead", 8, color=colors.white, space_after=0)
+        DC = st("DevCell", 8, space_after=0)
+        tbl = Table([[Paragraph(_t(c), HC) for c in cols]] + [[Paragraph(_t(c), DC) for c in r] for r in rows],
+                    colWidths=_fr_col_widths(cols, rows, A4[0] - 4*cm, font_size=8), repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), BLUE), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#e2e8f0")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8fafc"), colors.white]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5)]))
+        story.append(tbl)
+        if len(hosts) > len(rows):
+            story.append(Paragraph(f"（僅列前 {len(rows)} 台，共 {len(hosts)} 台）", SMAL))
+        risks = [i for i in (lan.get("assessment") or {}).get("issues") or []
+                 if i.get("severity") in ("critical", "warning") and i.get("category") != "掃描範圍"]
+        for i in risks:
+            lbl, col = _SEV_META.get(i.get("severity"), ("", "#000000"))
+            story.append(Paragraph(f"<font color='{col}'>【{lbl}】{_t(i.get('title'))}</font>　{_t(i.get('problem'))}", BODY))
+            story.append(Paragraph(f"　→ {_t(i.get('recommendation'))}", SMAL))
+        story.append(Spacer(1, 0.5*cm))
+
+    # ── AI 建議行動 ──
+    story.append(Paragraph(f"{next(num)}、建議行動方案", H2))
     PRIO = [
         ("immediate", "【立即處理】", "#dc2626"),
         ("adjust",    "【建議調整】", "#ca8a04"),
@@ -723,21 +799,33 @@ def _build_full_report(sections, site_info, branding):
     story.append(Spacer(1, 0.4*cm))
 
     # ── 有線 LAN 資產盤點 ──
-    story.append(Paragraph("三、有線 LAN 資產盤點", H2))
+    story.append(Paragraph("三、設備盤點", H2))
     hosts = lan.get("hosts") or []
     if hosts:
         summ = "、".join(f"{t} {c}" for t, c in (lan.get("summary") or {}).items())
         story.append(Paragraph(f"　網段 {_t(lan.get('subnet',''))}：{_t(summ)}", SMAL))
-        rows = [["IP", "MAC", "廠牌", "類型", "開放埠"]]
-        for h in hosts[:40]:
-            rows.append([str(h.get("ip") or ""), str(h.get("mac") or ""),
-                         str(h.get("vendor") or "")[:18], str(h.get("type") or ""),
-                         " ".join(str(p) for p in h.get("open_ports", [])[:6])])
-        story.append(_data_table(rows, FONT, BLUE, header=True))
-        if len(hosts) > 40:
-            story.append(Paragraph(f"　（僅列前 40 台，共 {len(hosts)} 台）", SMAL))
+        from reportlab.platypus import Table, TableStyle
+        cols = ["設備名稱", "IP", "MAC", "廠牌", "類型", "型號 / 系統"]
+        rows = []
+        for h in hosts[:_FR_MAX_ROWS]:
+            ms = " / ".join(x for x in (h.get("model"), h.get("os")) if x)
+            rows.append([str(h.get("name") or "—")[:60], str(h.get("ip") or ""), str(h.get("mac") or ""),
+                         str(h.get("vendor") or "")[:40], str(h.get("type") or ""), ms[:90] or "—"])
+        HC = st("DevHead", 8, color=colors.white)
+        DC = st("DevCell", 8)
+        tbl = Table([[Paragraph(_t(c), HC) for c in cols]] + [[Paragraph(_t(c), DC) for c in r] for r in rows],
+                    colWidths=_fr_col_widths(cols, rows, A4[0] - 4*cm, font_size=8), repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), BLUE), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#e2e8f0")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8fafc"), colors.white]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 1)]))
+        story.append(tbl)
+        if len(hosts) > len(rows):
+            story.append(Paragraph(f"　（僅列前 {len(rows)} 台，共 {len(hosts)} 台）", SMAL))
     else:
-        story.append(Paragraph("尚無 LAN 盤查資料（可於「有線 LAN」分頁掃描）。", BODY))
+        story.append(Paragraph("尚無設備盤點資料（可於「設備盤點」分頁掃描，或執行現場診斷）。", BODY))
     story.append(Spacer(1, 0.4*cm))
 
     # ── 網路診斷 ──
