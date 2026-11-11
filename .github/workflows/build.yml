@@ -12,7 +12,7 @@ on:
 jobs:
   test:
     name: Unit tests
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       # 測試只用標準庫（封包解析、辨識規則、NAT 判讀），用獨立的 Python 跑，不影響下面的打包
@@ -24,7 +24,7 @@ jobs:
 
   build-macos:
     name: macOS DMG (Apple Silicon)
-    runs-on: macos-14            # Apple Silicon runner
+    runs-on: macos-15            # Apple Silicon runner（macos-14 已被 GitHub 下架）
 
     steps:
       - uses: actions/checkout@v4
