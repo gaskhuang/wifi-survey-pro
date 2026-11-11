@@ -510,7 +510,7 @@ def api_iperf_stream():
 def api_diagnose_stream():
     """
     一鍵診斷完整管線（SSE）：
-    Wi-Fi 掃描 → 頻道分析 → 連線狀態 → 網路環境 → 設備盤點 → Ping/DNS → 速度測試 → 穩定度 → AI 建議
+    Wi-Fi 掃描 → 頻道分析 → 連線狀態 → 網路環境 → Ping/DNS → 速度測試 → 穩定度 → 設備盤點 → AI 建議
     事件：step（進度）/ partial（各區結果）/ done（完整彙整）
     """
     duration = _num(request.args.get("duration"), 30, 10, 120)
@@ -559,7 +559,39 @@ def api_diagnose_stream():
         # 網路環境：閘道 / DHCP / DNS / 公網 IP / ISP / NAT 層數
         yield from run_step("env", "網路環境（閘道・DHCP・DNS・對外線路）", net_env.overview)
 
-        # 設備盤點：深度掃描目前所在網段（排在測速之前，避免測速占滿頻寬影響探測）
+        yield from run_step("netperf", "Ping / DNS 延遲測試",
+                            lambda: scanner.test_network_performance("8.8.8.8", "8.8.8.8", 5))
+
+        # 5: 速度測試
+        if do_speed:
+            yield from run_step("speedtest", "網路速度測試（上傳/下載）",
+                                speedtest_cf.run_speedtest)
+
+        # 6: 穩定度（背景跑 + 進度回報）
+        yield ev("step", {"key": "stability", "label": f"連線穩定度測試（{duration} 秒）",
+                          "status": "running"})
+        if stability.TEST.start(duration):
+            stab_flag["on"] = True
+            while True:
+                st = stability.TEST.status()
+                if not st["running"]:
+                    break
+                yield ev("progress", {"key": "stability",
+                                      "elapsed": st["elapsed"],
+                                      "total":   st["duration"]})
+                time.sleep(2)
+            stab_flag["on"] = False
+            results["stability"] = stability.TEST.result_data
+            yield ev("step", {"key": "stability", "label": "連線穩定度測試",
+                              "status": "ok"})
+            yield ev("partial", {"key": "stability", "data": results["stability"]})
+        else:
+            yield ev("step", {"key": "stability", "label": "連線穩定度測試",
+                              "status": "fail", "error": "已有穩定度測試進行中"})
+
+        # 設備盤點：深度掃描目前所在網段。
+        # 一定要排在延遲 / 測速 / 穩定度之後：掃描會在短時間內對閘道送出大量探測，
+        # 有些路由器的防洪機制會暫時擋掉這台電腦的 ping，排在前面會污染後面的量測結果。
         subnet = ((results.get("env") or {}).get("lan") or {}).get("subnet", "")
         if do_lan and subnet:
             label = f"設備盤點（{subnet}）"
@@ -605,36 +637,6 @@ def api_diagnose_stream():
                     lan_stop.set()
                     yield ev("step", {"key": "lan", "label": label, "status": "fail",
                                       "error": holder.get("e") or "掃描逾時"})
-
-        yield from run_step("netperf", "Ping / DNS 延遲測試",
-                            lambda: scanner.test_network_performance("8.8.8.8", "8.8.8.8", 5))
-
-        # 5: 速度測試
-        if do_speed:
-            yield from run_step("speedtest", "網路速度測試（上傳/下載）",
-                                speedtest_cf.run_speedtest)
-
-        # 6: 穩定度（背景跑 + 進度回報）
-        yield ev("step", {"key": "stability", "label": f"連線穩定度測試（{duration} 秒）",
-                          "status": "running"})
-        if stability.TEST.start(duration):
-            stab_flag["on"] = True
-            while True:
-                st = stability.TEST.status()
-                if not st["running"]:
-                    break
-                yield ev("progress", {"key": "stability",
-                                      "elapsed": st["elapsed"],
-                                      "total":   st["duration"]})
-                time.sleep(2)
-            stab_flag["on"] = False
-            results["stability"] = stability.TEST.result_data
-            yield ev("step", {"key": "stability", "label": "連線穩定度測試",
-                              "status": "ok"})
-            yield ev("partial", {"key": "stability", "data": results["stability"]})
-        else:
-            yield ev("step", {"key": "stability", "label": "連線穩定度測試",
-                              "status": "fail", "error": "已有穩定度測試進行中"})
 
         # 7: AI 分析（背景執行 + 心跳，讓前端顯示經過時間）
         if do_ai:
@@ -1208,7 +1210,7 @@ def api_info():
     import platform, sys
     return jsonify({
         "app":      "NetInspect Pro",
-        "version":  "3.1.2",
+        "version":  "3.2.0",
         "python":   sys.version.split()[0],
         "platform": platform.platform(),
         "corewlan": _check_corewlan(),

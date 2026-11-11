@@ -207,7 +207,7 @@
     <svg class="logo-big"><use href="#wifi"/></svg>
     <div class="badge">● macOS 原生 · 現場勘測利器</div>
     <h1>看懂你的 Wi-Fi，<br>並知道下一步怎麼修</h1>
-    <p class="sub">一套跑在 Mac 上的專業現場網路健檢平台。<strong class="accent">Wi-Fi + 有線 LAN + 流量異常 + AI 診斷</strong>一站到位，工程師帶一台筆電到府，跑完就交出一份完整檢測報告——而且每項測試都直接給可執行的優化建議，不只是丟數據。</p>
+    <p class="sub">一套跑在 Mac 上的專業現場網路健檢平台。<strong class="accent">Wi-Fi + 網路環境 + 設備盤點 + 流量異常 + AI 診斷</strong>一站到位，工程師帶一台筆電到府，跑完就交出一份完整檢測報告——而且每項測試都直接給可執行的優化建議，不只是丟數據。</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/gaskhuang/wifi-survey-pro/releases/latest/download/NetInspect.Pro.dmg" target="_blank" rel="noopener">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -215,7 +215,7 @@
       </a>
       <a class="btn btn-ghost" href="https://github.com/gaskhuang/wifi-survey-pro" target="_blank" rel="noopener">在 GitHub 查看原始碼</a>
     </div>
-    <div class="note">v3.1.2 · Apple Silicon（M1 以後）· macOS 14 以上 · 下載 32 MB，內含完整執行環境，免裝 Python</div>
+    <div class="note">v3.2.0 · Apple Silicon（M1 以後）· macOS 14 以上 · 下載 32 MB，內含完整執行環境，免裝 Python</div>
 
     <!-- app mockup -->
     <div class="shot">
@@ -265,7 +265,7 @@
       <div class="feat">
         <div class="fi"><svg viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/></svg></div>
         <h3>現場一鍵診斷</h3>
-        <p>一鍵跑完連線品質、頻道、安全、效能全項檢查，算出 0–100 健康分數與評級，並列出優先排序的問題清單。</p>
+        <p>按一下，同一頁看完整個網路：Wi-Fi 訊號與頻道、對外線路與 ISP、雙重 NAT、DHCP 與 DNS、網段裡的所有設備、測速與穩定度，最後列出優先排序的處理清單。</p>
       </div>
       <div class="feat">
         <div class="fi"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></div>
@@ -305,9 +305,9 @@
       </div>
       <div class="feat">
         <div class="fi"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></div>
-        <h3>有線 LAN 盤查</h3>
-        <p>掃描內網存活設備，靠 MAC OUI + 埠指紋判斷品牌與類型：PC / Mac / NAS / 印表機 / 防火牆 / AP，逐台可 ping／埠掃描，匯出資產清單。</p>
-        <span class="tag">內網資產盤點</span>
+        <h3>設備盤點</h3>
+        <p>掃出網段裡的每一台設備，再用 mDNS、NetBIOS、UPnP、SNMP 問出它自己的名稱、型號、作業系統：PC、Mac、手機、NAS、印表機、交換器、AP、IP 攝影機、電視。點一下看完整資料，匯出資產清單。</p>
+        <span class="tag">名稱・型號・系統</span>
       </div>
       <div class="feat">
         <div class="fi"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-4 4 3 5-7"/></svg></div>
@@ -324,7 +324,7 @@
       <div class="feat">
         <div class="fi"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg></div>
         <h3>整合檢測報告（白標）</h3>
-        <p>一鍵把 Wi-Fi、有線 LAN、流量、診斷彙整成一份專業 PDF；每個功能測完也能單獨匯出報告。可放貴公司 logo／抬頭，交付客戶就是你自己的品牌。</p>
+        <p>一鍵把 Wi-Fi、網路環境、設備清單、流量、診斷彙整成一份專業 PDF；每個功能測完也能單獨匯出報告。可放貴公司 logo／抬頭，交付客戶就是你自己的品牌。</p>
         <span class="tag">可放廠商品牌</span>
       </div>
     </div>
@@ -387,7 +387,7 @@
           <li><b>晶片</b>Apple Silicon（M1、M2、M3、M4 以後）<br>不支援 Intel 處理器的 Mac</li>
           <li><b>作業系統</b>macOS 14 Sonoma 以上</li>
           <li><b>空間</b>下載 32 MB，安裝後約 130 MB</li>
-          <li><b>權限</b>定位服務（macOS 需要它才會提供 Wi-Fi 名稱與 BSSID；第一次開啟會跳出授權視窗）</li>
+          <li><b>權限</b>定位服務（macOS 需要它才會提供 Wi-Fi 名稱與 BSSID）、區域網路（盤點設備用）；第一次使用會跳出授權視窗</li>
         </ul>
       </div>
       <div class="req">
@@ -409,7 +409,7 @@
       </div>
     </div>
     <div class="specs">
-      <div class="spec"><b>版本</b> v3.1.2</div>
+      <div class="spec"><b>版本</b> v3.2.0</div>
       <div class="spec"><b>頻段</b> 2.4 / 5 / 6 GHz</div>
       <div class="spec"><b>執行環境</b> 內含 Python 3.13</div>
       <div class="spec"><b>介面</b> macOS 原生視窗</div>

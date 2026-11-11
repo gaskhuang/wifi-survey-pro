@@ -335,8 +335,68 @@ def list_interfaces() -> list:
                                 f"超出單次上限 {MAX_HOSTS} 台，先建議掃描本機所在 /24")
             else:
                 item["note"] = "無法取得子網遮罩，暫以 /24 推估"
+        item["link"] = _link_label(iface)
         result.append(item)
+    # 其他同時連著的網路（例如 Wi-Fi 之外又插了有線）：工程師可以分別盤點
+    seen = {r["subnet_cidr"] for r in result}
+    for name, addr, mask in _other_ipv4_ifaces(skip_ip=ip):
+        try:
+            net = ipaddress.ip_network(f"{addr}/{mask}", strict=False)
+        except ValueError:
+            continue
+        if net.prefixlen > 30:
+            continue
+        cidr = str(net) if net.num_addresses <= MAX_ADDRS else str(ipaddress.ip_network(addr + "/24", strict=False))
+        if cidr in seen:
+            continue
+        seen.add(cidr)
+        result.append({"name": "其他網卡", "ip": addr, "iface": name, "netmask": mask, "gateway": "",
+                       "is_default": False, "subnet_cidr": cidr, "prefix": int(cidr.split("/")[1]),
+                       "link": _link_label(name)})
     return result
+
+
+_HW_PORTS = {"ts": 0.0, "map": {}}
+
+
+def _link_label(iface: str) -> str:
+    """介面的連線方式：Wi-Fi / 有線（硬體埠名稱）。結果快取 60 秒。"""
+    if not iface or not caps.is_macos():
+        return ""
+    if time.time() - _HW_PORTS["ts"] > 60:
+        m = {}
+        for block in _run_out(["/usr/sbin/networksetup", "-listallhardwareports"], 4).split("\n\n"):
+            dev = re.search(r"^Device: (\S+)$", block, re.M)
+            port = re.search(r"^Hardware Port: (.+)$", block, re.M)
+            if dev and port:
+                m[dev.group(1)] = port.group(1).strip()
+        _HW_PORTS.update(ts=time.time(), map=m)
+    port = _HW_PORTS["map"].get(iface, "")
+    if "Wi-Fi" in port or "AirPort" in port:
+        return "Wi-Fi"
+    return f"有線（{port}）" if port else ""
+
+
+def _other_ipv4_ifaces(skip_ip: str = "") -> list:
+    """其他已啟用、有私有 IPv4 的介面 → [(名稱, IP, 遮罩)]。略過 loopback、VPN / 通道、橋接。"""
+    out = []
+    if not caps.is_macos():
+        return out
+    for block in re.split(r"\n(?=\S)", _run_out([_bin("ifconfig")], 3)):
+        m = re.match(r"(\w+): flags=\w+<([^>]*)>", block)
+        if not m:
+            continue
+        name, flags = m.group(1), m.group(2).split(",")
+        if "UP" not in flags or "RUNNING" not in flags or "LOOPBACK" in flags or "POINTOPOINT" in flags:
+            continue
+        if name.startswith(("utun", "bridge", "awdl", "llw", "gif", "stf", "ap", "anpi")):
+            continue
+        for a, mk in re.findall(r"inet (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-f]{8})", block):
+            if a == skip_ip or not is_private_ipv4(a) or a.startswith("169.254."):
+                continue
+            mask = socket.inet_ntoa(struct.pack("!I", int(mk, 16)))
+            out.append((name, a, mask))
+    return out
 
 
 # ── Ping（跨平台單一主機）────────────────────────────────────────────────────────
@@ -641,9 +701,9 @@ def _icmp_sweep(ips, on_alive=None, should_stop=None, wait_s: float = 1.1,
                 if _stopped():
                     return False
                 _send(ip)
-                if n % 32 == 31:                              # 小幅節流並順手收回覆
-                    _drain()
-                    time.sleep(0.003)
+                if n % 8 == 7:                                # 約 400 台/秒：一次全送會造成 ARP / ICMP 洪水，
+                    _drain()                                  # 觸發路由器的防洪（漏掉設備、之後的 ping 被擋）
+                    time.sleep(0.02)
             return True
 
         if not _round(ips):
@@ -789,7 +849,7 @@ def scan(subnet_cidr: str, deep: bool = True, progress=None,
 
     # 1a) 快速路徑：ICMP datagram socket（/24 約 1 s）；done 依等待時間比例推進
     t_ping = time.time()
-    est = 1.2 + total * 0.0003                  # 預估 sweep 耗時（送出 + 補送 + 等待）
+    est = 1.4 + total * 0.005                   # 預估 sweep 耗時（送出 + 補送 + 等待；約 400 台/秒）
 
     def _on_alive(ip):
         with prog_lock:

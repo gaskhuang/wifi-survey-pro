@@ -576,8 +576,22 @@ def _build_diagnosis_pdf(data, site_info):
         story.append(Paragraph("（無頻道分析資料）", SMAL))
     story.append(Spacer(1, 0.5*cm))
 
+    # ── 這個 Wi-Fi 的基地台（與目前連線同 SSID 的所有無線電）──
+    num = iter("五六七八九十")
+    own = sorted([n for n in nets if isinstance(n, dict) and cur.get("ssid")
+                  and not str(cur.get("ssid")).startswith("<") and n.get("ssid") == cur.get("ssid")],
+                 key=lambda n: -(n.get("rssi") or -999))
+    if own:
+        ap_rows = [["BSSID", "廠牌", "頻段", "頻道", "頻寬", "訊號", "備註"]]
+        for n in own[:60]:
+            ap_rows.append([str(n.get("bssid") or "—"), str(n.get("vendor") or "—")[:28], str(n.get("band") or ""),
+                            str(n.get("channel") or ""), str(n.get("width") or ""),
+                            f"{n.get('rssi')} dBm" if n.get("rssi") is not None else "—",
+                            "目前連線" if n.get("bssid") and n.get("bssid") == cur.get("bssid") else ""])
+        story += [Paragraph(f"{next(num)}、這個 Wi-Fi 的基地台（{len(own)} 個無線電）", H2),
+                  _data_table(ap_rows, FONT, BLUE, header=True), Spacer(1, 0.5*cm)]
+
     # ── 網路環境（對外線路 / 區域網路 / 判讀）──
-    num = iter("五六七八九")
     env = data.get("env") or {}
     if env:
         lan_e, wan_e = env.get("lan") or {}, env.get("wan") or {}

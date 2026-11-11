@@ -42,8 +42,15 @@ const LAN = (() => {
     if (_ifaceLoaded) return;
     try {
       const d = await (await fetch("/api/lan/interfaces")).json();
-      const ifc = (d.interfaces || [])[0];
+      const list = d.interfaces || [];
+      const ifc = list[0];
       if (ifc && !$("lan-cidr").value) $("lan-cidr").value = ifc.subnet_cidr;
+      // 同時連著多個網路（Wi-Fi + 有線）→ 網段欄位提供清單，可分別盤點
+      $("lan-cidr-list").innerHTML = list.map(i =>
+        `<option value="${esc(i.subnet_cidr)}">${esc([i.link || i.iface, i.ip].filter(Boolean).join(" · "))}</option>`).join("");
+      if (list.length > 1 && !_result && !_es)
+        showStatus(`這台電腦同時連著 ${list.length} 個網路：` +
+          list.map(i => `${i.link || i.iface} ${i.subnet_cidr}`).join("、") + "。可在網段欄位切換後分別掃描。");
       _ifaceLoaded = true;
     } catch (_) {}
   }

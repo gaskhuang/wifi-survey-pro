@@ -54,21 +54,6 @@ def _dhcp(iface: str) -> dict:
     return out
 
 
-def _link_type(iface: str) -> str:
-    """介面是 Wi-Fi 還是有線（依硬體埠名稱）。"""
-    txt = _run(["/usr/sbin/networksetup", "-listallhardwareports"], 4)
-    for block in txt.split("\n\n"):
-        if re.search(rf"^Device: {re.escape(iface)}$", block, re.M):
-            m = re.search(r"^Hardware Port: (.+)$", block, re.M)
-            port = m.group(1) if m else ""
-            if "Wi-Fi" in port or "AirPort" in port:
-                return "Wi-Fi"
-            if "Ethernet" in port or "LAN" in port or "Thunderbolt" in port or "USB" in port:
-                return f"有線（{port}）"
-            return port
-    return ""
-
-
 def _dns_servers() -> list:
     out = []
     for line in _run(["/usr/sbin/scutil", "--dns"], 3).splitlines():
@@ -93,7 +78,7 @@ def local() -> dict:
     lan_scanner._ensure_oui()
     dhcp = _dhcp(iface)
     return {
-        "interface": iface, "link": _link_type(iface) if iface else "",
+        "interface": iface, "link": lan_scanner._link_label(iface) if iface else "",
         "ip": ip, "netmask": mask, "subnet": cidr,
         "apipa": ip.startswith("169.254.") if ip else False,
         "gateway": gw, "gateway_mac": gw_mac,

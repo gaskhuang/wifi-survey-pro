@@ -14,10 +14,10 @@
     { key: "analysis",  label: "頻道分析" },
     { key: "current",   label: "目前連線狀態" },
     { key: "env",       label: "網路環境（閘道・DHCP・DNS・對外線路）" },
-    { key: "lan",       label: "設備盤點" },
     { key: "netperf",   label: "Ping / DNS 延遲測試" },
     { key: "speedtest", label: "網路速度測試（上傳/下載）" },
     { key: "stability", label: "連線穩定度測試" },
+    { key: "lan",       label: "設備盤點" },   // 放在量測之後：掃描會干擾延遲與穩定度的數字
     { key: "ai",        label: "AI 智慧分析" },
   ];
 
@@ -148,6 +148,7 @@
     renderCards();
     renderEnv();
     renderDevices();
+    renderAPs();
     drawChannelChart();
     renderAI();
     if (_data.scan?.length) APP.networks = _data.scan;
@@ -253,6 +254,37 @@
         <td><span class="lan-type-badge${String(h.type).startsWith("本機") ? " self" : ""}">${escHtml(h.type || "不明")}</span></td>
         <td class="lan-model">${escHtml(h.model || "—")}${sub(escHtml(h.os || (h.os_hint ? h.os_hint + "（推測）" : "")))}</td></tr>`).join("");
   }
+  // ── 這個 Wi-Fi 的基地台：與目前連線同 SSID 的所有無線電（一台 AP 通常有 2～3 個）──
+  function ownAPs() {
+    const cur = _data.current || {};
+    if (!cur.connected || !cur.ssid || String(cur.ssid).startsWith("<")) return [];
+    return (_data.scan || []).filter(n => n.ssid === cur.ssid)
+      .sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999));
+  }
+
+  function renderAPs() {
+    const sec = document.getElementById("dg-ap-section");
+    const aps = ownAPs();
+    if (!aps.length) { sec.classList.add("hidden"); return; }
+    sec.classList.remove("hidden");
+    const cur = _data.current || {};
+    document.getElementById("dg-ap-count").textContent = aps.length;
+    const bands = {};
+    aps.forEach(n => { bands[n.band] = (bands[n.band] || 0) + 1; });
+    document.getElementById("dg-ap-hint").textContent =
+      `　SSID「${cur.ssid}」在這個位置收得到 ${aps.length} 個無線電（` +
+      Object.entries(bands).map(([b, c]) => `${b} ${c} 個`).join("、") + "）";
+    document.getElementById("dg-ap-tbody").innerHTML = aps.map(n => {
+      const mine = n.bssid && n.bssid === cur.bssid;
+      return `<tr><td style="font-family:monospace">${escHtml(n.bssid || "—")}</td>
+        <td>${escHtml(n.vendor || "—")}</td><td>${escHtml(n.band || "")}</td>
+        <td>${escHtml(n.channel ?? "")}</td><td>${escHtml(n.width || "")}</td>
+        <td style="color:${rssiToColor(n.rssi)};font-weight:600">${escHtml(n.rssi ?? "—")} dBm</td>
+        <td>${escHtml(String(n.standard || "").replace(/\s*\(.*?\)\s*/g, ""))}</td>
+        <td>${mine ? '<span class="lan-type-badge self">目前連線</span>' : ""}</td></tr>`;
+    }).join("");
+  }
+
   document.getElementById("dg-dev-more").addEventListener("click", e => {
     e.preventDefault();
     document.querySelector('.nav-item[data-tab="lan"]')?.click();

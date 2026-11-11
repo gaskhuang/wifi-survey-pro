@@ -16,7 +16,7 @@ set -euo pipefail
 
 APP_NAME="NetInspect Pro"
 BUNDLE_ID="tw.zonetech.netinspect-pro"
-VERSION="3.1.2"
+VERSION="3.2.0"
 
 # ── 可攜式 Python（版本與 SHA256 鎖定；升級時三個值一起改）──────────────────
 PBS_TAG="20261026"

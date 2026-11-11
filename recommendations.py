@@ -342,8 +342,10 @@ def assess_lan(scan: dict) -> dict:
         issues.append({
             "severity": "info", "category": "拓樸", "icon": "🌐",
             "title": "未辨識到預設閘道",
-            "problem": "掃描結果未包含閘道設備，可能跨網段或閘道封鎖探測。",
-            "recommendation": "確認掃描網段是否正確；必要時手動指定閘道 IP 檢查。",
+            "problem": "掃描結果未包含閘道設備，可能跨網段或閘道封鎖探測。" +
+                       ("整個網段幾乎沒有設備回應，也可能是 macOS 沒有允許這個 App 存取區域網路。" if n <= 1 else ""),
+            "recommendation": "確認掃描網段是否正確；必要時手動指定閘道 IP 檢查。" +
+                              ("並到 系統設定 › 隱私權與安全性 › 區域網路，確認 NetInspect Pro 已開啟。" if n <= 1 else ""),
             "value": 0,
         })
     if no_vendor:
